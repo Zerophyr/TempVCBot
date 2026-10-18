@@ -5,6 +5,7 @@
 !healthcheck.py
 !room_state.py
 !room_service.py
+!control_messages.py
 !test_deployment.py
 !tests/
 !tests/*.py

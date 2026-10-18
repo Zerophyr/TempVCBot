@@ -33,6 +33,22 @@ class RoomService:
         self.tasks = {}
         self.dashboard_factory = lambda channel_id: None
         self.launcher_factory = lambda: None
+        self.cleanup_controls = self._no_cleanup
+
+    @staticmethod
+    async def _no_cleanup(channel_id):
+        pass
+
+    async def forget(self, channel_id):
+        self.store.rooms.pop(channel_id, None)
+        self.store.save()
+        task = self.tasks.pop(channel_id, None)
+        if task and task is not asyncio.current_task():
+            task.cancel()
+        for view in self.bot.persistent_views:
+            if getattr(view, 'channel_id', None) == channel_id:
+                view.stop()
+        await self.cleanup_controls(channel_id)
 
     async def close(self):
         tasks = list(self.tasks.values())
@@ -119,14 +135,21 @@ class RoomService:
         self.store.rooms[candidate.channel_id] = candidate
         self.store.save()
 
-    async def create(self, creator):
+    async def create(self, creator, *, guests=()):
         if creator.bot:
             raise RoomError('Bots cannot create temporary rooms.')
+        for guest in guests:
+            if getattr(getattr(guest, 'guild', None), 'id', None) != creator.guild.id:
+                raise RoomError('Choose members of this server.')
+            if guest.bot:
+                raise RoomError('Choose people, rather than bot accounts.')
         async with self.creation_locks[(creator.guild.id, creator.id)]:
             existing = self.owned(creator)
             if existing:
                 channel = self.bot.get_channel(existing.channel_id)
                 if channel:
+                    if guests:
+                        raise RoomError('You already have a room. Use Manage my room to invite more friends.')
                     if creator.voice and creator.voice.channel and creator.voice.channel.id != channel.id:
                         await creator.move_to(channel)
                     await self.refresh_panel(existing)
@@ -138,6 +161,7 @@ class RoomService:
             if not isinstance(category, discord.CategoryChannel):
                 raise RoomError('Room creation is not configured. Ask a server admin to run /setup.')
             room = Room(channel_id=0, guild_id=creator.guild.id, creator_id=creator.id, host_id=creator.id)
+            room.invited.update(guest.id for guest in guests if guest.id != creator.id)
             channel = await category.create_voice_channel(
                 name=f"{creator.display_name}'s Room"[:100],
                 overwrites=build_overwrites(creator.guild, room, self.audience_ids),
@@ -261,8 +285,7 @@ class RoomService:
                 return
             channel = self.bot.get_channel(channel_id)
             if channel is None:
-                self.store.rooms.pop(channel_id)
-                self.store.save()
+                await self.forget(channel_id)
                 return
             present = self.humans(channel)
             for ident in set(room.join_order) - present.keys():
@@ -276,8 +299,7 @@ class RoomService:
                     self.schedule(channel_id, delay=remaining)
                     return
                 await channel.delete(reason='Temporary voice room is empty')
-                self.store.rooms.pop(channel_id)
-                self.store.save()
+                await self.forget(channel_id)
                 return
             successor = room.choose_host(present.keys())
             if successor is not None and successor != room.host_id:
@@ -320,19 +342,8 @@ class RoomService:
             else:
                 self.schedule(new_id)
         settings = self.settings.get(str(member.guild.id), {})
-        if new_id and new_id == settings.get('creator_channel_id') and not member.bot:
-            try:
-                await self.create(member)
-            except (RoomError, discord.HTTPException):
-                log.exception('Could not create or return member to temporary room')
-                try:
-                    await after.channel.send(
-                        f'<@{member.id}>, your room could not be opened. Use /room or Create a room in '
-                        'the voice-controls channel; ask an admin if it happens again.',
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                except discord.HTTPException:
-                    pass
+        if old_id and old_id == settings.get('legacy_entry_channel_id'):
+            await self.retire_entry(member.guild, member.guild.get_channel(settings.get('category_id')))
 
     async def migrate_legacy(self, path):
         path = Path(path)
@@ -359,8 +370,41 @@ class RoomService:
             self.store.rooms[channel.id] = room
         self.store.save()
 
+    async def retire_entry(self, guild, category):
+        """Retire the configured legacy entry without deleting chat history."""
+        settings = self.settings[str(guild.id)]
+        entry_id = settings.pop('creator_channel_id', None) or settings.get('legacy_entry_channel_id')
+        if not entry_id:
+            return
+        settings['legacy_entry_channel_id'] = entry_id
+        atomic_json(self.config_path, self.settings)
+        entry = guild.get_channel(entry_id)
+        if entry is not None:
+            if not isinstance(entry, discord.VoiceChannel) or entry.id != entry_id or entry.name != '➕ Create VC':
+                log.warning('Legacy entry %s no longer matches; leaving channel untouched', entry_id)
+                return
+            if entry.members:
+                return  # Retry after its final occupant leaves.
+            try:
+                has_history = any([message async for message in entry.history(limit=1)])
+            except discord.HTTPException:
+                has_history = True  # Preserve a channel whose history cannot be checked.
+            if has_history:
+                if category is None:
+                    raise RoomError('The managed category is missing; legacy chat has been preserved.')
+                template = Room(channel_id=entry_id, guild_id=guild.id,
+                                creator_id=guild.me.id, host_id=guild.me.id)
+                await entry.edit(name='archived-create-vc', category=category,
+                                 overwrites=build_overwrites(guild, template, self.audience_ids),
+                                 reason='Preserve legacy entry chat while moving creation to Voice Dashboard')
+                settings['archived_entry_channel_id'] = entry_id
+            else:
+                await entry.delete(reason='Voice Dashboard replaces the unused temporary-room entry')
+        settings.pop('legacy_entry_channel_id', None)
+        atomic_json(self.config_path, self.settings)
+
     async def setup(self, guild):
-        """Idempotently configure only the bot's category, entry and launcher."""
+        """Idempotently configure the managed category and Voice Dashboard."""
         settings = self.settings.setdefault(str(guild.id), {})
         category = guild.get_channel(settings.get('category_id', 0))
         if not isinstance(category, discord.CategoryChannel):
@@ -369,17 +413,8 @@ class RoomService:
             category = await guild.create_category('Temporary Channels', reason='TempVCBot setup')
         template = Room(channel_id=category.id, guild_id=guild.id, creator_id=guild.me.id, host_id=guild.me.id)
         await category.edit(overwrites=build_overwrites(guild, template, self.audience_ids), reason='Hidden room defaults')
-        entry_category = guild.get_channel(self.entry_category_id) if self.entry_category_id else category
-        if entry_category is None:
-            raise RoomError('Configured Voice Channels category is missing. Ask an admin to check ENTRY_CATEGORY_ID.')
         entry_policy = copy.deepcopy(template)
         entry_policy.mode = 'public'
-        entry = guild.get_channel(settings.get('creator_channel_id', 0))
-        if entry is None:
-            entry = await entry_category.create_voice_channel('➕ Create VC',
-                        overwrites=build_overwrites(guild, entry_policy, self.audience_ids))
-        else:
-            await entry.edit(category=entry_category, overwrites=build_overwrites(guild, entry_policy, self.audience_ids))
         controls = guild.get_channel(settings.get('controls_channel_id', 0))
         control_overwrites = build_overwrites(guild, entry_policy, self.audience_ids)
         for target, overwrite in control_overwrites.items():
@@ -387,19 +422,21 @@ class RoomService:
             overwrite.add_reactions = target == guild.me
             overwrite.use_application_commands = True
         if controls is None:
-            controls = await category.create_text_channel('voice-controls', overwrites=control_overwrites,
+            controls = await category.create_text_channel('voice-dashboard', overwrites=control_overwrites,
                         topic='Create and manage your temporary voice room. Rooms start hidden; only hosts can invite.')
         else:
-            await controls.edit(overwrites=control_overwrites)
-        settings.update(category_id=category.id, creator_channel_id=entry.id, controls_channel_id=controls.id)
+            await controls.edit(name='voice-dashboard', overwrites=control_overwrites,
+                                topic='Create a hidden voice room, choose friends, and manage your room here.')
+        settings.update(category_id=category.id, controls_channel_id=controls.id, dashboard_version=3)
         atomic_json(self.config_path, self.settings)
+        await self.retire_entry(guild, category)
         await self.ensure_launcher(guild)
         return settings
 
     async def ensure_launcher(self, guild):
         settings = self.settings[str(guild.id)]
         channel = guild.get_channel(settings.get('controls_channel_id', 0))
-        if channel is None:
+        if channel is None or settings.get('dashboard_version') != 3:
             return await self.setup(guild)
         message = None
         if settings.get('launcher_message_id'):
@@ -407,11 +444,12 @@ class RoomService:
                 message = await channel.fetch_message(settings['launcher_message_id'])
             except discord.NotFound:
                 pass
-        embed = discord.Embed(title='🎙️ Your voice room', color=0x5865F2,
+        embed = discord.Embed(title='🎙️ Voice Dashboard', color=0x5865F2,
             description='Rooms start **hidden**. Create one or manage the room you host.\n\n'
             '**Create a room:** make your own private voice space. If you are already in voice, you will be moved.\n'
+            '**Create with friends:** choose people first; your hidden room is immediately visible to them.\n'
             '**Manage my room:** invite friends, change privacy, rename, set a limit or manage people.\n\n'
-            'You can also join **➕ Create VC**. Only the current host can invite or change settings. '
+            'Only the current host can invite or change settings. Invitations make hidden rooms visible to those people. '
             'Everyone with room access can write in its chat.\n\n'
             'The earliest-joined member becomes host when the host leaves; the creator regains ownership on return. '
             'Empty rooms are automatically deleted. Server administrators retain access.')
@@ -434,8 +472,7 @@ class RoomService:
                 continue
             channel = self.bot.get_channel(room.channel_id)
             if channel is None:
-                self.store.rooms.pop(room.channel_id)
-                self.store.save()
+                await self.forget(room.channel_id)
                 continue
             if hasattr(channel, 'guild') and channel.guild.id != guild.id:
                 raise RoomError('Persisted room belongs to a different server; check room state.')
@@ -445,3 +482,5 @@ class RoomService:
                 await channel.edit(overwrites=build_overwrites(guild, room, self.audience_ids), reason='Restore room access after restart')
                 await self.refresh_panel(room)
         await self.ensure_launcher(guild)
+        if self.settings[str(guild.id)].get('legacy_entry_channel_id'):
+            await self.retire_entry(guild, guild.get_channel(self.settings[str(guild.id)]['category_id']))

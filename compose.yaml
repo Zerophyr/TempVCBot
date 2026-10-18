@@ -2,10 +2,11 @@ name: tempvcbot
 services:
   bot:
     build: .
-    image: tempvcbot:room-controls-v2
+    image: tempvcbot:voice-dashboard-v3
     container_name: tempvcbot
     restart: unless-stopped
     init: true
+    stop_grace_period: 30s
     user: "10001:10001"
     read_only: true
     cap_drop: [ALL]
@@ -15,7 +16,6 @@ services:
     environment:
       DATA_DIR: /data
       DISCORD_TOKEN_FILE: /run/secrets/discord_token
-      ENTRY_CATEGORY_ID: "1476824295392018554"
       ACCESS_ROLE_IDS: "1525266928690528438,1525266836441137353,1525280615925026826,1476830702052835348,1525267166172156044,1525267387983597578,1525267274875928708"
     volumes:
       - ./data:/data

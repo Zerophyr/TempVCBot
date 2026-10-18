@@ -254,6 +254,91 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         parent.create_text_channel.assert_not_awaited()
         self.assertEqual(settings['controls_channel_id'], 600)
 
+    async def test_creation_grants_selected_guests_hidden_access_before_channel_exists(self):
+        self.store.rooms.clear()
+        await self.service.create(self.creator, guests=[self.friend, self.other])
+        overwrites = self.category.create_voice_channel.call_args.kwargs['overwrites']
+        for guest in [self.friend, self.other]:
+            self.assertTrue(overwrites[guest].view_channel)
+            self.assertTrue(overwrites[guest].connect)
+            self.assertTrue(overwrites[guest].send_messages)
+        self.assertFalse(overwrites[self.role].view_channel)
+        self.assertEqual(self.store.rooms[100].invited, {20, 30})
+
+    async def test_invalid_creation_guest_does_not_create_a_room(self):
+        self.store.rooms.clear()
+        stranger = member(40, SimpleNamespace(id=2))
+        with self.assertRaisesRegex(service_module.RoomError, 'server'):
+            await self.service.create(self.creator, guests=[stranger])
+        self.category.create_voice_channel.assert_not_awaited()
+
+    async def test_existing_creator_cannot_add_guests_while_another_host_is_active(self):
+        self.room.host_id = 20
+        with self.assertRaises(service_module.RoomError):
+            await self.service.create(self.creator, guests=[self.other])
+        self.channel.edit.assert_not_awaited()
+
+    async def test_room_deletion_cleans_private_controls_and_stops_views(self):
+        self.channel.members = []
+        panel = SimpleNamespace(channel_id=100, stop=MagicMock())
+        unrelated = SimpleNamespace(channel_id=200, stop=MagicMock())
+        self.bot.persistent_views = [panel, unrelated]
+        self.service.cleanup_controls = AsyncMock()
+        await self.service.reconcile(100)
+        self.service.cleanup_controls.assert_awaited_once_with(100)
+        panel.stop.assert_called_once()
+        unrelated.stop.assert_not_called()
+
+    async def test_setup_creates_voice_dashboard_without_recreating_voice_entry(self):
+        self.settings['1'].pop('creator_channel_id')
+        controls = MagicMock(spec=discord.TextChannel)
+        controls.id = 600
+        self.category.edit = AsyncMock()
+        self.category.create_text_channel = AsyncMock(return_value=controls)
+        self.service.ensure_launcher = AsyncMock()
+        await self.service.setup(self.guild)
+        self.category.create_voice_channel.assert_not_awaited()
+        self.assertEqual(self.category.create_text_channel.call_args.args[0], 'voice-dashboard')
+
+    async def test_empty_legacy_entry_with_no_chat_is_retired(self):
+        self.assertTrue(hasattr(self.service, 'retire_entry'), 'Legacy entry retirement is missing')
+        entry = MagicMock(spec=discord.VoiceChannel)
+        entry.id, entry.name, entry.members = 300, '➕ Create VC', []
+        entry.delete = AsyncMock()
+        async def history():
+            if False:
+                yield None
+        entry.history.return_value = history()
+        self.channels[300] = entry
+        await self.service.retire_entry(self.guild, self.category)
+        entry.delete.assert_awaited_once()
+        self.assertNotIn('creator_channel_id', self.settings['1'])
+
+    async def test_entry_with_chat_history_is_preserved_as_hidden_archive(self):
+        self.assertTrue(hasattr(self.service, 'retire_entry'), 'Legacy entry retirement is missing')
+        entry = MagicMock(spec=discord.VoiceChannel)
+        entry.id, entry.name, entry.members = 300, '➕ Create VC', []
+        entry.delete = AsyncMock()
+        entry.edit = AsyncMock()
+        async def history():
+            yield SimpleNamespace(id=5)
+        entry.history.return_value = history()
+        self.channels[300] = entry
+        await self.service.retire_entry(self.guild, self.category)
+        entry.delete.assert_not_awaited()
+        self.assertEqual(entry.edit.call_args.kwargs['name'], 'archived-create-vc')
+        self.assertFalse(entry.edit.call_args.kwargs['overwrites'][self.role].view_channel)
+
+    async def test_occupied_legacy_entry_is_not_removed(self):
+        self.assertTrue(hasattr(self.service, 'retire_entry'), 'Legacy entry retirement is missing')
+        entry = MagicMock(spec=discord.VoiceChannel)
+        entry.id, entry.name, entry.members = 300, '➕ Create VC', [self.creator]
+        entry.delete = AsyncMock()
+        self.channels[300] = entry
+        await self.service.retire_entry(self.guild, self.category)
+        entry.delete.assert_not_awaited()
+        self.assertEqual(self.settings['1']['legacy_entry_channel_id'], 300)
+
 
 if __name__ == '__main__':
     unittest.main()
