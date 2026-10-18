@@ -154,8 +154,7 @@ class RoomService:
                         await creator.move_to(channel)
                     await self.refresh_panel(existing)
                     return existing
-                self.store.rooms.pop(existing.channel_id)
-                self.store.save()
+                await self.forget(existing.channel_id)
             settings = self.settings.get(str(creator.guild.id), {})
             category = creator.guild.get_channel(settings.get('category_id', 0))
             if not isinstance(category, discord.CategoryChannel):

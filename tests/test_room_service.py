@@ -289,6 +289,13 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         panel.stop.assert_called_once()
         unrelated.stop.assert_not_called()
 
+    async def test_replacing_missing_room_cleans_its_private_controls(self):
+        self.channels.pop(100)
+        self.service.cleanup_controls = AsyncMock()
+        self.service.refresh_panel = AsyncMock()
+        await self.service.create(self.creator)
+        self.service.cleanup_controls.assert_awaited_once_with(100)
+
     async def test_setup_creates_voice_dashboard_without_recreating_voice_entry(self):
         self.settings['1'].pop('creator_channel_id')
         controls = MagicMock(spec=discord.TextChannel)
