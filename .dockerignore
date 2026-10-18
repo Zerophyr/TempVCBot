@@ -1,0 +1,10 @@
+*
+!Dockerfile
+!requirements.txt
+!TempVCBot.py
+!healthcheck.py
+!room_state.py
+!room_service.py
+!test_deployment.py
+!tests/
+!tests/*.py

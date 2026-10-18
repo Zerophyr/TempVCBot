@@ -1,0 +1,36 @@
+name: tempvcbot
+services:
+  bot:
+    build: .
+    image: tempvcbot:room-controls-v2
+    container_name: tempvcbot
+    restart: unless-stopped
+    init: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      DATA_DIR: /data
+      DISCORD_TOKEN_FILE: /run/secrets/discord_token
+      ENTRY_CATEGORY_ID: "1476824295392018554"
+      ACCESS_ROLE_IDS: "1525266928690528438,1525266836441137353,1525280615925026826,1476830702052835348,1525267166172156044,1525267387983597578,1525267274875928708"
+    volumes:
+      - ./data:/data
+      - ./secrets/discord_token:/run/secrets/discord_token:ro
+    mem_limit: 256m
+    cpus: 0.50
+    pids_limit: 100
+    healthcheck:
+      test: [CMD, python, /app/healthcheck.py]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "3"

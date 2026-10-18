@@ -1,0 +1,18 @@
+# Runtime secrets and state
+secrets/
+data/
+.env
+.env.*
+!.env.example
+config.json
+channels.json
+rooms.json
+health.json
+# Python development files
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+# Local logs
+*.log
