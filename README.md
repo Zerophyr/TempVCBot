@@ -48,6 +48,34 @@ The bot checks effective access before moving a creator into a room, so it
 does not bypass a moderator's explicit Connect denial.
 Native moderation still follows [Discord's permission hierarchy](https://docs.discord.com/developers/topics/permissions).
 
+## Visible ownership and responsibility for changes
+
+The room chat control card prominently shows **Current room owner**, their
+mention and numeric user ID. A native voice-channel status also shows the
+owner's name and ID independently of chat scrolling. Both update on handover
+and creator return. Regular members cannot edit this status through native
+channel controls; server staff can override it.
+
+Successful name and participant-limit changes through the bot publish a chat
+announcement with the acting member's mention and ID, the old and new values,
+and the current owner. Staff overrides identify the staff member separately
+from the owner. Ownership changes announce both the previous and new owner.
+These messages do not ping members or `@everyone`.
+
+Bot name/limit edits also include the acting member ID and current host ID in
+the Discord audit-log reason. Native staff edits remain attributed by Discord.
+Room chat and these announcements disappear when the room is deleted; they
+are not a separate permanent moderation log.
+
+The owner status uses the bot's **Set Voice Channel Status** and **Manage
+Channels** permissions. New rooms and migrated rooms grant the status
+permission locally to the bot, with a staff override. A moderator's explicit
+bot restriction is respected. If updating the status or sending an
+announcement fails, the bot logs the failure; the successful room edit is
+not undone. The owner card remains the authoritative bot-owned indicator.
+
+See Discord's [voice-channel status endpoint](https://docs.discord.com/developers/resources/channel#set-voice-channel-status).
+
 ## Full rooms and one-time notifications
 
 Use **Find a room** in the dashboard or `/rooms`. The member picker lists
@@ -147,17 +175,32 @@ deployment. Keep `/opt/tempvcbot/secrets` untouched. The token is read from
 - `config.json`: managed category, dashboard and pinned launcher IDs. Existing
   dashboard IDs/history are reused; dashboard revision becomes 4.
 - `rooms.json`: schema 3 stores creator, host, arrival order, panel, timestamps,
-  waiting member IDs and a one-time public-policy migration flag. Reading a schema-2 file converts it in memory without
+  waiting member IDs and a one-time public-policy migration flag. Pending
+  migration also retains temporary old-policy provenance across saves/restarts;
+  this is discarded after successful migration. Reading a schema-2 file converts it in memory without
   writing during load. Saving writes schema 3 and omits removed privacy,
   invitation and block fields.
-- At the first future startup, active old rooms receive public overwrites, removing old
-  per-member restrictions. Legacy limits 1–4 become 5; 0 and 5–99 are preserved.
+- At the first future startup, active old rooms receive public overwrites,
+  removing the known old bot privacy, invitation and host-block rules.
+  Unrelated moderator overwrites and values differing from that known baseline
+  are preserved. A manual value identical to an old bot rule cannot be
+  distinguished retrospectively; review such overlaps before rollout. If old
+  provenance is unavailable, existing unknown overwrites are retained
+  conservatively and may need an administrator's review.
+  Legacy limits 1–4 become 5; 0 and 5–99 are preserved.
   Channel IDs, host/creator, panel IDs, arrival order and timestamps are retained.
   The migration flag is then persisted. Subsequent restarts and host handovers
   retain native moderation overwrites and staff-set limits rather than resetting them.
 - `channels.json`: legacy ownership is imported only if rooms.json is absent.
 - `health.json`: initialization/gateway readiness, room count, private replies
   and notification opt-ins. Failed initialization cannot report ready.
+
+Voice transitions during initialization are buffered and their arrival order
+is replayed before readiness. Lifecycle checks are armed for restored rooms;
+creator return is reconciled immediately. Availability is rechecked from the
+live gateway cache before each notification is consumed, including after
+startup. Detached REST results are used for fresh control cards, not as a
+substitute for current capacity while sending a batch of DMs.
 
 The retired **➕ Create VC** entry is not recreated. Archived entry chat stays
 hidden to preserve history; it is not an active room or a private-room feature.

@@ -57,3 +57,22 @@ retain manual moderation overwrites and limits on subsequent restarts, and
 stop rewriting channel permissions during host handover. Check effective
 Connect/View access before automatically moving a creator into any room.
 The existing category and archived history remain unchanged.
+
+## Predeployment review corrections and ownership visibility
+
+Preserve temporary migration provenance until a room's public policy is
+successfully applied. Remove only the known old bot values; retain unrelated
+native overwrites and deviations, including moderator Connect/Speak denials.
+Identical overlapping values cannot be attributed retrospectively and need
+review before the eventual rollout. Unknown overwrites are kept conservatively.
+
+Check the live cached capacity before consuming every subscriber's opt-in;
+do not use detached REST edit results for a delivery batch. Buffer and replay
+startup voice transitions, then arm lifecycle checks before readiness.
+
+Show the current owner and stable ID in the room chat card and native voice
+channel status. Staff retain a status override. Announce handovers and
+successful bot name/limit changes with actor ID and before/after values,
+without pings. Include actor and host IDs in Discord audit-log reasons.
+Owner status and announcements are best effort if staff restrict the bot;
+room chat remains temporary and no separate permanent moderation log is added.

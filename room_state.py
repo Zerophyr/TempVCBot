@@ -39,6 +39,9 @@ class Room:
     panel_id: int | None = None
     created_at: float = field(default_factory=time.time)
     public_policy_applied: bool = False
+    # Temporary provenance for removing only the former bot's access rules.
+    # Retained across interrupted migrations, then discarded after success.
+    migration_policy: dict | None = None
 
     def join(self, member_id):
         if member_id not in self.join_order:
@@ -61,6 +64,8 @@ class Room:
     def to_dict(self):
         value = asdict(self)
         value['waiting'] = sorted(self.waiting)
+        if self.migration_policy is None:
+            value.pop('migration_policy')
         return value
 
     @classmethod
@@ -68,10 +73,16 @@ class Room:
         value = dict(value)
         if legacy:
             value['public_policy_applied'] = False
-            if value.pop('mode', 'hidden') not in {'hidden', 'visible', 'public'}:
+            mode = value.pop('mode', 'hidden')
+            if mode not in {'hidden', 'visible', 'public'}:
                 raise ValueError('Invalid legacy room privacy mode')
-            value.pop('invited', None)
-            value.pop('blocked', None)
+            invited = set(map(int, value.pop('invited', [])))
+            blocked = set(map(int, value.pop('blocked', [])))
+            permitted = (invited | {value['creator_id'], value['host_id']}) - blocked
+            value['migration_policy'] = {
+                'visible': mode != 'hidden', 'public': mode == 'public',
+                'members': {str(ident): ident not in blocked for ident in permitted | blocked},
+            }
         value['waiting'] = set(map(int, value.get('waiting', [])))
         value['join_order'] = {int(key): int(order) for key, order in value.get('join_order', {}).items()}
         room = cls(**value)
@@ -109,13 +120,50 @@ def member_access(allowed=True):
 def build_overwrites(guild, room, audience_ids):
     audience = [role for ident in audience_ids if (role := guild.get_role(ident)) is not None]
     overwrites = {guild.default_role: member_access(not audience)}
+    overwrites[guild.default_role].set_voice_channel_status = False
     for role in audience:
         overwrites[role] = member_access()
+        overwrites[role].set_voice_channel_status = False
     for role in guild.roles:
         if staff_permissions(role.permissions):
             overwrites[role] = member_access()
+            overwrites[role].set_voice_channel_status = True
     for ident in {room.creator_id, room.host_id}:
         target = guild.get_member(ident) or discord.Object(id=ident, type=discord.Member)
         overwrites[target] = member_access()
     overwrites[guild.me] = member_access()
+    overwrites[guild.me].set_voice_channel_status = True
     return overwrites
+
+
+def migration_overwrites(guild, room, audience_ids, existing):
+    """Replace known legacy bot rules, preserving unrelated moderator changes.
+
+    A value identical to a known old bot rule cannot be attributed separately
+    to a moderator. Only that known baseline is removed; unknown rules and
+    values differing from the baseline are retained.
+    """
+    policy = build_overwrites(guild, room, audience_ids)
+    previous = {}
+    provenance = room.migration_policy
+    if provenance is not None:
+        audience = [role for ident in audience_ids if (role := guild.get_role(ident)) is not None]
+        everyone = member_access(provenance['visible'] and not audience)
+        everyone.connect = provenance['public'] and not audience
+        previous[(False, guild.default_role.id)] = everyone
+        for role in audience:
+            overwrite = member_access(provenance['visible'])
+            overwrite.connect = provenance['public']
+            previous[(False, role.id)] = overwrite
+        for ident, allowed in provenance['members'].items():
+            previous[(True, int(ident))] = member_access(allowed)
+        previous[(True, guild.me.id)] = member_access()
+    for target, current in existing.items():
+        old = previous.get((not isinstance(target, discord.Role), target.id))
+        merged = policy.get(target, discord.PermissionOverwrite())
+        for name, value in current:
+            if value is not None and (old is None or value != getattr(old, name)):
+                setattr(merged, name, value)
+        if not merged.is_empty():
+            policy[target] = merged
+    return policy

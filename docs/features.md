@@ -12,6 +12,8 @@
 | Manual moderation | Staff retain native Discord removal, move, mute, kick and ban rights according to their actual permissions and role hierarchy. |
 | Availability alerts | Explicit one-time DM opt-in for a full room; cancellable, deduplicated, and restored after restart. No place is reserved or automatic move made. |
 | Ownership transfer | After a 10-second grace when the host leaves, the earliest-joined remaining human becomes host. The original creator regains hosting on return. |
+| Visible owner | Current owner mention and user ID in the room chat card; owner name and ID in native channel status, updated on handover and creator return. |
+| Change accountability | Successful bot name/limit edits announce actor ID and before/after values in room chat; Discord audit-log reasons also identify the actor and current host. Staff overrides identify staff separately. |
 | Permanent controls | Pinned dashboard and room chat panels; personal menus can be reopened anytime. |
 | One room per creator | Temporarily hosting another person's room does not consume that slot. Existing rooms are reused, respecting effective access and capacity. |
 | Cleanup | Empty rooms close after 10 seconds; never-joined rooms have 60 seconds. Associated chat, temporary controls and notification opt-ins are cleaned up. |

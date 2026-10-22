@@ -26,6 +26,8 @@ HELP = (
     '**Hosting:** after a 10-second grace, the earliest-joined person still present becomes host. '
     'The creator regains hosting on return.\n'
     '**Controls:** use Manage my room, /room, or the room chat panel. Reopen personal menus anytime.\n'
+    '**Who owns this room?** The room card shows the current owner and user ID; the voice status also identifies them. '
+    'Ownership changes and bot name/limit changes are announced in room chat with the responsible user ID.\n'
     '**Server staff:** retain normal Discord removal, move, mute, kick and ban powers according to their permissions. '
     'Staff can use Find a room → Manage room without becoming host.\n'
     '**Cleanup:** rooms disappear 10 seconds after everyone leaves. Rooms created outside voice '
@@ -299,6 +301,7 @@ class RoomBot(commands.Bot):
         self.heartbeat_task = None
         self.restore_lock = asyncio.Lock()
         self.initialized, self.initialization_error = False, None
+        self.pending_voice_updates = []
         self.register_commands()
 
     async def setup_hook(self):
@@ -319,13 +322,29 @@ class RoomBot(commands.Bot):
         if self.heartbeat_task is None or self.heartbeat_task.done():
             self.heartbeat_task = asyncio.create_task(self.heartbeat())
         async with self.restore_lock:
+            self.initialized = False
             try:
                 await self.service.migrate_legacy(self.data_dir / 'channels.json')
                 for guild in self.guilds:
                     if str(guild.id) in self.settings:
                         await self.service.restore(guild)
                 synced = await self.tree.sync()
+                # Replay chronology without network calls or handovers against
+                # intermediate state. Events arriving during replay join the
+                # next batch; the final drain/readiness transition has no await.
+                while self.pending_voice_updates:
+                    pending, self.pending_voice_updates = self.pending_voice_updates, []
+                    for member, before, after in pending:
+                        await self.service.record_voice_update(member, before, after)
+                for room in list(self.store.rooms.values()):
+                    channel = self.get_channel(room.channel_id)
+                    creator_present = channel and any(member.id == room.creator_id for member in channel.members)
+                    self.service.schedule(room.channel_id,
+                        delay=0 if creator_present and room.host_id != room.creator_id else None)
                 self.initialized, self.initialization_error = True, None
+                # Channel updates during startup may also have opened capacity.
+                for channel_id in list(self.store.rooms):
+                    await self.service.notify_available(channel_id)
                 log.info('Ready as %s; guilds=%s; commands=%s; persistent_views=%s',
                          self.user, [guild.id for guild in self.guilds], len(synced), len(self.persistent_views))
             except Exception as error:
@@ -335,6 +354,8 @@ class RoomBot(commands.Bot):
     async def on_voice_state_update(self, member, before, after):
         if self.initialized:
             await self.service.voice_update(member, before, after)
+        elif before.channel != after.channel:
+            self.pending_voice_updates.append((member, before, after))
 
     async def on_guild_channel_delete(self, channel):
         if channel.id in self.store.rooms:

@@ -179,7 +179,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(service_module.RoomError):
                 await self.service.rename(100, self.creator, name)
         await self.service.rename(100, self.creator, 'German practice')
-        self.channel.edit.assert_any_await(name='German practice', reason='Renamed by temporary room host')
+        self.channel.edit.assert_any_await(name='German practice', reason='TempVCBot rename by user 10; current host 10')
 
     async def test_legacy_migration_preserves_creator_and_order(self):
         self.store.rooms.clear()

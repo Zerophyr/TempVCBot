@@ -10,7 +10,7 @@ from pathlib import Path
 
 import discord
 
-from room_state import Room, atomic_json, build_overwrites, member_access, staff_permissions
+from room_state import Room, atomic_json, build_overwrites, member_access, migration_overwrites, staff_permissions
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class RoomService:
         self.locks = defaultdict(asyncio.Lock)
         self.creation_locks = defaultdict(asyncio.Lock)
         self.notification_locks = defaultdict(asyncio.Lock)
+        self.owner_statuses = {}
         self.tasks = {}
         self.dashboard_factory = lambda channel_id: None
         self.launcher_factory = lambda: None
@@ -42,6 +43,7 @@ class RoomService:
 
     async def forget(self, channel_id):
         self.store.rooms.pop(channel_id, None)
+        self.owner_statuses.pop(channel_id, None)
         self.store.save()
         task = self.tasks.pop(channel_id, None)
         if task and task is not asyncio.current_task():
@@ -145,7 +147,9 @@ class RoomService:
         # lock during network IO: people must still be able to cancel or leave.
         async with self.notification_locks[channel_id]:
             room = self.store.rooms.get(channel_id)
-            channel = channel or self.bot.get_channel(channel_id)
+            # REST edit results are detached snapshots. Wait for the gateway's
+            # cached state rather than trusting a possibly stale caller hint.
+            channel = self.bot.get_channel(channel_id)
             if room is None or channel is None or self.full(channel):
                 return
             for ident in sorted(room.waiting):
@@ -158,7 +162,7 @@ class RoomService:
                     live_channel = self.bot.get_channel(channel_id)
                     if room is None or live_channel is None:
                         return
-                    if self.full(channel):
+                    if self.full(live_channel):
                         return
                     if ident not in room.waiting:
                         continue
@@ -175,8 +179,8 @@ class RoomService:
                         continue
                 try:
                     await member.send(
-                        f'A place is available in **{discord.utils.escape_markdown(channel.name)}** '
-                        f'in **{discord.utils.escape_markdown(channel.guild.name)}**: {self.link(room)}\n'
+                        f'A place is available in **{discord.utils.escape_markdown(live_channel.name)}** '
+                        f'in **{discord.utils.escape_markdown(live_channel.guild.name)}**: {self.link(room)}\n'
                         'You asked for this one-time notification. A place is not reserved and may fill again. '
                         'You will not be moved automatically.', allowed_mentions=discord.AllowedMentions.none())
                 except discord.HTTPException as error:
@@ -184,15 +188,26 @@ class RoomService:
 
     def embed(self, room, channel):
         embed = discord.Embed(title=channel.name, description='**🌐 Public**\nMembers with normal voice access can see, join and chat.', color=0x5865F2)
-        embed.add_field(name='Current host', value=f'<@{room.host_id}>')
+        embed.add_field(name='👑 Current room owner (host)', value=f'<@{room.host_id}>\nUser ID: `{room.host_id}`', inline=False)
         embed.add_field(name='Creator', value=f'<@{room.creator_id}>')
         embed.add_field(name='Participant limit', value=str(channel.user_limit or 'Unlimited'))
         embed.add_field(name='Your room', value=f'[Open voice and chat]({self.link(room)})', inline=False)
         embed.set_footer(text='Join / Notify me: everyone • Settings: host and server staff • /room reopens controls')
         return embed
 
-    async def ensure_panel(self, room):
-        channel = self.channel(room)
+    @staticmethod
+    def owner_line(room):
+        return f'👑 **Current room owner:** <@{room.host_id}> · User ID: `{room.host_id}`'
+
+    async def announce(self, room, channel, content):
+        try:
+            await channel.send(f'{content}\n{self.owner_line(room)}',
+                               allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException as error:
+            log.warning('Room %s announcement unavailable: HTTP %s, code %s', room.channel_id, error.status, error.code)
+
+    async def ensure_panel(self, room, *, channel=None):
+        channel = channel or self.channel(room)
         panel = None
         if room.panel_id:
             try:
@@ -200,20 +215,41 @@ class RoomService:
             except discord.NotFound:
                 pass
         if panel is None:
-            panel = await channel.send(embed=self.embed(room, channel), view=self.dashboard_factory(room.channel_id),
+            panel = await channel.send(content=self.owner_line(room), embed=self.embed(room, channel), view=self.dashboard_factory(room.channel_id),
                                        allowed_mentions=discord.AllowedMentions.none())
             room.panel_id = panel.id
             self.store.save()
         else:
-            await panel.edit(embed=self.embed(room, channel), view=self.dashboard_factory(room.channel_id),
+            await panel.edit(content=self.owner_line(room), embed=self.embed(room, channel), view=self.dashboard_factory(room.channel_id),
                              allowed_mentions=discord.AllowedMentions.none())
         return panel
 
-    async def refresh_panel(self, room):
+    async def refresh_panel(self, room, *, channel=None):
         try:
-            await self.ensure_panel(room)
+            await self.ensure_panel(room, channel=channel)
         except discord.HTTPException:
             log.exception('Room %s updated, but its panel could not be refreshed', room.channel_id)
+        await self.refresh_owner_status(room, channel=channel)
+
+    async def refresh_owner_status(self, room, *, channel=None):
+        # Voice-chat messages cannot be made sticky. The native channel status
+        # provides an owner label independent of chat scrolling, alongside the
+        # current owner in the control card and ownership announcements.
+        channel = channel or self.channel(room)
+        permissions = channel.permissions_for(channel.guild.me)
+        if not permissions.set_voice_channel_status or not permissions.manage_channels:
+            return  # A moderator may intentionally restrict the bot.
+        host = channel.guild.get_member(room.host_id)
+        display_name = host.display_name if host else str(room.host_id)
+        status = f'👑 Owner: {display_name} · {room.host_id}'[:500]
+        if self.owner_statuses.get(room.channel_id) == status:
+            return
+        try:
+            await channel.edit(status=status, reason=f'TempVCBot current room owner: user {room.host_id}')
+        except discord.HTTPException as error:
+            log.warning('Room %s owner status unavailable: HTTP %s, code %s', room.channel_id, error.status, error.code)
+        else:
+            self.owner_statuses[room.channel_id] = status
 
     async def _apply(self, candidate):
         # Hosting grants bot controls, not Discord moderation powers. Do not
@@ -265,8 +301,15 @@ class RoomService:
             raise RoomError('Choose a room name from 1 to 100 characters on a single line.')
         async with self.locks[channel_id]:
             room = self.authorize(channel_id, actor)
-            await self.channel(room).edit(name=name, reason='Renamed by temporary room host')
-            await self.refresh_panel(room)
+            channel = self.channel(room)
+            old_name = channel.name
+            updated = await channel.edit(name=name, reason=f'TempVCBot rename by user {actor.id}; current host {room.host_id}')
+            updated = updated if isinstance(updated, discord.VoiceChannel) else channel
+            await self.refresh_panel(room, channel=updated)
+            if old_name != name:
+                await self.announce(room, updated,
+                    f'✏️ <@{actor.id}> (User ID: `{actor.id}`) renamed this room:\n'
+                    f'**{discord.utils.escape_markdown(old_name)}** → **{discord.utils.escape_markdown(name)}**')
 
     async def set_limit(self, channel_id, actor, limit):
         async with self.locks[channel_id]:
@@ -274,9 +317,16 @@ class RoomService:
             minimum = 1 if self.is_staff(actor) else 5
             if isinstance(limit, bool) or not isinstance(limit, int) or not (limit == 0 or minimum <= limit <= 99):
                 raise RoomError(f'Choose {minimum}–99 participants, or 0 for unlimited.')
-            updated = await self.channel(room).edit(user_limit=limit, reason='Participant limit set by temporary room host')
-            await self.refresh_panel(room)
-        await self.notify_available(channel_id, channel=updated if isinstance(updated, discord.VoiceChannel) else None)
+            channel = self.channel(room)
+            old_limit = channel.user_limit
+            updated = await channel.edit(user_limit=limit, reason=f'TempVCBot limit change by user {actor.id}; current host {room.host_id}')
+            updated = updated if isinstance(updated, discord.VoiceChannel) else channel
+            await self.refresh_panel(room, channel=updated)
+            if old_limit != limit:
+                await self.announce(room, updated,
+                    f'🔢 <@{actor.id}> (User ID: `{actor.id}`) changed the participant limit: '
+                    f'**{old_limit or "Unlimited"}** → **{limit or "Unlimited"}**.')
+        await self.notify_available(channel_id)
 
     async def channel_update(self, channel):
         if channel.id not in self.store.rooms:
@@ -332,33 +382,31 @@ class RoomService:
                 return
             successor = room.choose_host(present.keys())
             if successor is not None and successor != room.host_id:
+                previous_host = room.host_id
                 candidate = copy.deepcopy(room)
                 candidate.host_id = successor
                 await self._apply(candidate)
                 await self.refresh_panel(candidate)
-                try:
-                    await channel.send(
-                        f'Host updated: <@{successor}>. The creator regains ownership when they return. '
-                        'The room stays public and its settings stay the same.',
-                        allowed_mentions=discord.AllowedMentions.none(),
-                    )
-                except discord.HTTPException:
-                    log.warning('Host changed for room %s; announcement unavailable', channel_id)
+                reason = ('The creator returned.' if successor == room.creator_id else
+                          'The previous host left; the earliest-joined remaining member takes over.')
+                await self.announce(candidate, channel,
+                    f'👑 Room ownership changed: <@{previous_host}> (`{previous_host}`) → '
+                    f'<@{successor}> (`{successor}`). {reason} Room settings stay the same.')
             else:
                 self.store.save()
 
-    async def voice_update(self, member, before, after):
+    async def record_voice_update(self, member, before, after):
+        """Record arrival order without network IO, including startup replays."""
         old_id = before.channel.id if before.channel else None
         new_id = after.channel.id if after.channel else None
         if old_id == new_id:
-            return
+            return old_id, new_id
         if old_id in self.store.rooms:
             async with self.locks[old_id]:
                 room = self.store.rooms.get(old_id)
                 if room:
                     room.leave(member.id)
                     self.store.save()
-            self.schedule(old_id)
         if new_id in self.store.rooms:
             async with self.locks[new_id]:
                 room = self.store.rooms.get(new_id)
@@ -366,6 +414,15 @@ class RoomService:
                     room.join(member.id)
                     room.waiting.discard(member.id)
                     self.store.save()
+        return old_id, new_id
+
+    async def voice_update(self, member, before, after):
+        old_id, new_id = await self.record_voice_update(member, before, after)
+        if old_id == new_id:
+            return
+        if old_id in self.store.rooms:
+            self.schedule(old_id)
+        if new_id in self.store.rooms:
             room = self.store.rooms.get(new_id)
             if room and member.id == room.creator_id:
                 await self.reconcile(new_id)
@@ -503,17 +560,22 @@ class RoomService:
             if hasattr(channel, 'guild') and channel.guild.id != guild.id:
                 raise RoomError('Persisted room belongs to a different server; check room state.')
             await self.reconcile(room.channel_id)
-            room = self.store.rooms.get(room.channel_id)
-            if room:
+            async with self.locks[room.channel_id]:
+                room = self.store.rooms.get(room.channel_id)
+                if room is None:
+                    continue
+                channel = self.channel(room)
                 updated = channel
                 if not room.public_policy_applied:
-                    updated = await channel.edit(overwrites=build_overwrites(guild, room, self.audience_ids),
-                                                 user_limit=5 if 0 < channel.user_limit < 5 else channel.user_limit,
-                                                 reason='One-time migration to public room access')
+                    updated = await channel.edit(
+                        overwrites=migration_overwrites(guild, room, self.audience_ids, channel.overwrites),
+                        user_limit=5 if 0 < channel.user_limit < 5 else channel.user_limit,
+                        reason='One-time migration to public room access, preserving moderator changes')
                     room.public_policy_applied = True
+                    room.migration_policy = None
                     self.store.save()
-                await self.refresh_panel(room)
-                await self.notify_available(room.channel_id, channel=updated if isinstance(updated, discord.VoiceChannel) else None)
+                await self.refresh_panel(room, channel=updated if isinstance(updated, discord.VoiceChannel) else None)
+            await self.notify_available(room.channel_id)
         await self.ensure_launcher(guild)
         if self.settings[str(guild.id)].get('legacy_entry_channel_id'):
             await self.retire_entry(guild, guild.get_channel(self.settings[str(guild.id)]['category_id']))

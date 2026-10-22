@@ -46,6 +46,22 @@ choose the room, then **Manage room**. Staff can set **1–99** participants or
 The bot preserves manual staff settings and moderation changes across host
 changes and restarts after the initial update.
 
+## Who is responsible for a room?
+
+Look for **👑 Current room owner** in the room's chat control card. It shows
+the owner and their user ID. The voice channel's status also shows the owner,
+so you can find them without scrolling through chat. Both update when hosting
+changes or the creator returns.
+
+When someone renames a room or changes its size through the bot, a message
+in room chat shows **who changed it**, their user ID, and the old and new
+settings. Staff changes identify the staff member as well as the current
+owner. These messages don't ping anyone. The bot also records the acting user
+ID in Discord's audit-log reason so moderators can trace a name change.
+
+These chat messages disappear with the temporary room. The owner card is
+the bot's current reference; server staff can override the native status.
+
 ## Leave and cleanup
 
 If the host leaves, the earliest-joined person still present becomes host
