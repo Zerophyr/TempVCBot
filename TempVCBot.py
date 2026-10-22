@@ -1,4 +1,4 @@
-"""TempVCBot: hidden rooms with persistent, host-only Discord controls."""
+"""TempVCBot: public rooms with host settings and opted-in availability alerts."""
 import asyncio
 import json
 import logging
@@ -11,22 +11,22 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from room_service import RoomError, RoomService
-from room_state import MODES, RoomStore, atomic_json
+from room_state import RoomStore, atomic_json
 from control_messages import ResponseTracker
 
 log = logging.getLogger(__name__)
 HELP = (
-    '**Create:** use Create a room or Create with friends in Voice Dashboard. New rooms are hidden.\n'
-    '**Invite:** the host selects friends with Invite friends; they receive voice and chat access.\n'
-    '**Privacy:** Hidden, Visible invite-only, or Public. Existing guests keep access when you lock the room.\n'
-    '**People:** disconnect, block from the room, revoke an invitation or unblock. '
-    'Revoking an invite alone does not stop public-room access; use Block for that.\n'
+    '**Create:** use Create a room in Voice Dashboard. Rooms are public with no limit by default.\n'
+    '**Join:** use Find a room or Join / Notify me to check availability and open its voice link.\n'
+    '**Full room:** choose Notify me for one DM when space opens. You can cancel anytime; '
+    'enable server-member DMs. Notifications do not reserve a place or move you automatically.\n'
+    '**Settings:** only the current host can rename or set a limit: 5–99 people, or 0 for unlimited. '
+    'There are no private modes, invitations, kicks or blocks. Everyone with normal voice access can chat and use video.\n'
     '**Hosting:** after a 10-second grace, the earliest-joined person still present becomes host. '
-    'The creator regains ownership on return and keeps access to their room.\n'
-    '**Controls:** use Manage my room, /room, or the panel in the room chat. '
-    'Only the current host can invite or change settings. Personal menus can always be reopened.\n'
+    'The creator regains hosting on return.\n'
+    '**Controls:** use Manage my room, /room, or the room chat panel. Reopen personal menus anytime.\n'
     '**Cleanup:** rooms disappear 10 seconds after everyone leaves. Rooms created outside voice '
-    'allow 60 seconds for someone to join. Server administrators retain access.'
+    'allow 60 seconds for someone to join. Save anything you want to keep from the chat.'
 )
 
 async def respond(interaction, content=None, *, room_id=None, **kwargs):
@@ -88,20 +88,6 @@ class SafeView(discord.ui.View):
     async def on_error(self, interaction, error, item):
         await show_error(interaction, error, room_id=getattr(self, 'channel_id', None))
 
-class HostView(SafeView):
-    def __init__(self, bot, channel_id, *, timeout=300):
-        super().__init__(timeout=timeout)
-        self.bot, self.channel_id = bot, channel_id
-
-    async def interaction_check(self, interaction):
-        try:
-            if interaction.guild is None:
-                raise RoomError('Open these controls inside the server.')
-            self.bot.service.authorize(self.channel_id, interaction.user)
-            return True
-        except RoomError as error:
-            await show_error(interaction, error, room_id=self.channel_id)
-            return False
 
 class LauncherView(SafeView):
     def __init__(self, bot):
@@ -112,14 +98,9 @@ class LauncherView(SafeView):
     async def create(self, interaction, button):
         await self.bot.create_for(interaction)
 
-    @discord.ui.button(label='Create with friends', emoji='👥', style=discord.ButtonStyle.primary, custom_id='tempvc:create_friends')
-    async def create_friends(self, interaction, button):
-        if interaction.guild is None:
-            raise RoomError('Create your room inside the server.')
-        if self.bot.service.owned(interaction.user):
-            return await self.bot.create_for(interaction)
-        await respond(interaction, 'Choose who can see, join and chat in your hidden room, then press **Create room**.',
-                      view=CreateRoomView(self.bot, interaction.user))
+    @discord.ui.button(label='Find a room', emoji='🔎', style=discord.ButtonStyle.primary, custom_id='tempvc:browse')
+    async def browse(self, interaction, button):
+        await self.bot.browse_for(interaction)
 
     @discord.ui.button(label='Manage my room', emoji='⚙️', custom_id='tempvc:manage')
     async def manage(self, interaction, button):
@@ -129,169 +110,140 @@ class LauncherView(SafeView):
     async def help(self, interaction, button):
         await respond(interaction, HELP)
 
-class DashboardView(HostView):
+class DashboardView(SafeView):
     def __init__(self, bot, channel_id):
-        super().__init__(bot, channel_id, timeout=None)
-        for action, label, emoji, row in [
-            ('invite', 'Invite friends', '👥', 0), ('privacy', 'Privacy', '🔒', 0),
-            ('people', 'Manage people', '🛡️', 0), ('rename', 'Rename', '✏️', 1),
-            ('limit', 'User limit', '🔢', 1), ('help', 'Help', '❔', 1),
+        super().__init__(timeout=None)
+        self.bot, self.channel_id = bot, channel_id
+        for action, label, emoji in [
+            ('availability', 'Join / Notify me', '🔔'), ('rename', 'Rename', '✏️'),
+            ('limit', 'User limit', '🔢'), ('help', 'Help', '❔'),
         ]:
-            button = discord.ui.Button(label=label, emoji=emoji, row=row,
-                style=discord.ButtonStyle.primary if action == 'invite' else discord.ButtonStyle.secondary,
+            button = discord.ui.Button(label=label, emoji=emoji,
+                style=discord.ButtonStyle.primary if action == 'availability' else discord.ButtonStyle.secondary,
                 custom_id=f'tempvc:room:{channel_id}:{action}')
             button.callback = self.callback_for(action)
             self.add_item(button)
 
+    async def interaction_check(self, interaction):
+        try:
+            self.bot.service.accessible(self.channel_id, interaction.user)
+            return True
+        except RoomError as error:
+            await show_error(interaction, error, room_id=self.channel_id)
+            return False
+
     def callback_for(self, action):
         async def callback(interaction):
+            if action == 'availability':
+                return await self.bot.open_room(interaction, self.channel_id)
+            if action == 'help':
+                return await respond(interaction, HELP, room_id=self.channel_id)
             room = self.bot.service.authorize(self.channel_id, interaction.user)
-            if action == 'invite':
-                await respond(interaction, 'Select server members, then press **Invite selected**.', view=InviteView(self.bot, room.channel_id))
-            elif action == 'privacy':
-                await respond(interaction, 'Choose who can see and join. Server administrators retain access.', view=PrivacyView(self.bot, room.channel_id))
-            elif action == 'people':
-                invited = ', '.join(f'<@{ident}>' for ident in sorted(room.invited - {room.creator_id, room.host_id})) or 'None'
-                blocked = ', '.join(f'<@{ident}>' for ident in sorted(room.blocked)) or 'None'
-                await respond(interaction, f'**Invited:** {invited}\n**Blocked:** {blocked}\n\nSelect a person and an action. '
-                              'Revoking an invite does not stop public-room access; blocking prevents rejoining.', view=PeopleView(self.bot, room.channel_id))
-            elif action in {'rename', 'limit'}:
-                channel = self.bot.service.channel(room)
-                value = channel.name if action == 'rename' else str(channel.user_limit)
-                await interaction.response.send_modal(SettingsModal(self.bot, room.channel_id, action, value))
-            else:
-                await respond(interaction, HELP, room_id=room.channel_id)
+            channel = self.bot.service.channel(room)
+            value = channel.name if action == 'rename' else str(channel.user_limit)
+            await interaction.response.send_modal(SettingsModal(self.bot, self.channel_id, action, value))
         return callback
 
-class CreateRoomView(SafeView):
-    def __init__(self, bot, creator):
+
+class UserView(SafeView):
+    def __init__(self, bot, actor, *, channel_id=None):
         super().__init__(timeout=300)
-        self.bot, self.creator_id, self.guild_id = bot, creator.id, creator.guild.id
-        self.selected_ids = []
-        picker = discord.ui.UserSelect(placeholder='Choose friends who can see and join…', min_values=0, max_values=10, row=0)
-
-        async def selected(interaction):
-            self.selected_ids = [member.id for member in picker.values]
-            await interaction.response.defer()
-
-        picker.callback = selected
-        self.add_item(picker)
+        self.bot, self.user_id, self.guild_id = bot, actor.id, actor.guild.id
+        self.channel_id = channel_id
 
     async def interaction_check(self, interaction):
-        if interaction.user.id != self.creator_id or interaction.guild is None or interaction.guild.id != self.guild_id:
-            await respond(interaction, 'Only the person creating this room can choose its initial guests.')
+        if interaction.user.id != self.user_id or interaction.guild is None or interaction.guild.id != self.guild_id:
+            await respond(interaction, 'Open your own room menu in Voice Dashboard.')
             return False
         return True
 
-    @discord.ui.button(label='Create room', emoji='➕', style=discord.ButtonStyle.primary, row=1)
-    async def create(self, interaction, button):
-        guests = []
+
+class AvailabilityView(UserView):
+    def __init__(self, bot, actor, room, channel):
+        super().__init__(bot, actor, channel_id=room.channel_id)
+        inside = actor.voice and actor.voice.channel and actor.voice.channel.id == room.channel_id
+        if inside:
+            self.add_item(discord.ui.Button(label='You are in this room', disabled=True, row=0))
+        elif not bot.service.full(channel):
+            self.add_item(discord.ui.Button(label='Join voice room', style=discord.ButtonStyle.link, url=bot.service.link(room), row=0))
+        else:
+            subscribe = discord.ui.Button(label='Notify me when a place opens', emoji='🔔',
+                style=discord.ButtonStyle.primary, disabled=actor.id in room.waiting, row=0)
+            subscribe.callback = self.subscribe
+            self.add_item(subscribe)
+        if actor.id in room.waiting:
+            cancel = discord.ui.Button(label='Cancel my notification', row=1)
+            cancel.callback = self.cancel
+            self.add_item(cancel)
+        refresh = discord.ui.Button(label='Check again', emoji='🔄', row=1)
+        refresh.callback = self.refresh
+        self.add_item(refresh)
+
+    async def subscribe(self, interaction):
         await interaction.response.defer(ephemeral=True)
-        for ident in self.selected_ids:
-            guests.append(interaction.guild.get_member(ident) or await interaction.guild.fetch_member(ident))
-        await self.bot.create_for(interaction, guests=guests)
+        subscribed = await self.bot.service.subscribe(self.channel_id, interaction.user)
+        notice = ('✅ I will DM you once when space opens. Enable DMs from server members. '
+                  'This does not reserve a place or move you automatically.' if subscribed
+                  else 'A place is already available. You can join now.')
+        await self.bot.open_room(interaction, self.channel_id, notice=notice)
 
-    @discord.ui.button(label='Cancel', row=1)
-    async def cancel(self, interaction, button):
-        await interaction.response.defer()
-        await interaction.delete_original_response()
-        await self.bot.responses.cleanup_user(None, interaction.user.id)
-
-class InviteView(HostView):
-    def __init__(self, bot, channel_id):
-        super().__init__(bot, channel_id)
-        self.selected_ids = []
-        self.picker = discord.ui.UserSelect(placeholder='Search server members…', min_values=1, max_values=10, row=0)
-        self.picker.callback = self.select_members
-        self.add_item(self.picker)
-
-    async def select_members(self, interaction):
-        self.selected_ids = [value.id for value in self.picker.values]
-        await interaction.response.defer()
-
-    @discord.ui.button(label='Invite selected', emoji='👥', style=discord.ButtonStyle.primary, row=1)
-    async def invite_selected(self, interaction, button):
-        await self.submit(interaction, notify=False)
-
-    @discord.ui.button(label='Invite + notify by DM', emoji='✉️', row=1)
-    async def invite_notify(self, interaction, button):
-        await self.submit(interaction, notify=True)
-
-    async def submit(self, interaction, *, notify):
-        if not self.selected_ids:
-            raise RoomError('Select at least one server member first.')
-        self.bot.service.authorize(self.channel_id, interaction.user)
+    async def cancel(self, interaction):
         await interaction.response.defer(ephemeral=True)
-        members = []
-        for ident in self.selected_ids:
-            members.append(interaction.guild.get_member(ident) or await interaction.guild.fetch_member(ident))
-        room = await self.bot.service.invite(self.channel_id, interaction.user, members)
-        names = ', '.join(discord.utils.escape_markdown(member.display_name) for member in members)
-        failed = 0
-        if notify:
-            for member in members:
-                try:
-                    await member.send(f'{discord.utils.escape_markdown(interaction.user.display_name)} invited you to a voice room '
-                        f'in **{discord.utils.escape_markdown(interaction.guild.name)}**. '
-                        f'You can see, join and chat here: {self.bot.service.link(room)}', allowed_mentions=discord.AllowedMentions.none())
-                except discord.HTTPException:
-                    failed += 1
-        suffix = f'\n{failed} DM notification(s) could not be delivered; their room access is already granted.' if failed else ''
-        await respond(interaction, f'✅ Access granted to **{names}**.\nShare this room link: {self.bot.service.link(room)}{suffix}', room_id=room.channel_id)
+        await self.bot.service.unsubscribe(self.channel_id, interaction.user)
+        await self.bot.open_room(interaction, self.channel_id, notice='Your notification has been cancelled.')
 
-class PrivacyView(HostView):
-    def __init__(self, bot, channel_id):
-        super().__init__(bot, channel_id)
-        picker = discord.ui.Select(placeholder='Choose room privacy', options=[
-            discord.SelectOption(label='Hidden', value='hidden', emoji='👻', description='Only you and invited members can see and join'),
-            discord.SelectOption(label='Visible · invite-only', value='visible', emoji='🔒', description='Visible to voice members; invitations required to join'),
-            discord.SelectOption(label='Public', value='public', emoji='🌐', description='Members with normal voice access can join'),
-        ])
-        async def selected(interaction):
-            await interaction.response.defer(ephemeral=True)
-            room = await self.bot.service.set_mode(self.channel_id, interaction.user, picker.values[0])
-            await respond(interaction, f'✅ Room privacy: **{MODES[room.mode][0]}**. Existing participants and invitations keep access.', room_id=room.channel_id)
-        picker.callback = selected
-        self.add_item(picker)
+    async def refresh(self, interaction):
+        await self.bot.open_room(interaction, self.channel_id)
 
-class PeopleView(HostView):
-    def __init__(self, bot, channel_id):
-        super().__init__(bot, channel_id)
-        self.member_id, self.action = None, None
-        users = discord.ui.UserSelect(placeholder='Choose a server member', row=0)
-        actions = discord.ui.Select(placeholder='Choose what to do', row=1, options=[
-            discord.SelectOption(label='Disconnect', value='disconnect', description='Remove from voice; they may rejoin'),
-            discord.SelectOption(label='Block from this room', value='block', description='Remove access and disconnect; prevents rejoining'),
-            discord.SelectOption(label='Revoke invitation', value='revoke', description='Remove invitation; public-room access still applies'),
-            discord.SelectOption(label='Unblock', value='unblock', description='Remove block; invite again for hidden-room access'),
-        ])
-        async def selected_member(interaction):
-            self.member_id = users.values[0].id
-            await interaction.response.defer()
-        async def selected_action(interaction):
-            self.action = actions.values[0]
-            await interaction.response.defer()
-        users.callback, actions.callback = selected_member, selected_action
-        self.add_item(users)
-        self.add_item(actions)
 
-    @discord.ui.button(label='Apply action', style=discord.ButtonStyle.primary, row=2)
-    async def apply(self, interaction, button):
-        if self.member_id is None or self.action is None:
-            raise RoomError('Choose a member and an action first.')
-        self.bot.service.authorize(self.channel_id, interaction.user)
-        await interaction.response.defer(ephemeral=True)
-        member = interaction.guild.get_member(self.member_id) or await interaction.guild.fetch_member(self.member_id)
-        await self.bot.service.manage_member(self.channel_id, interaction.user, member, self.action)
-        labels = {'disconnect': 'Disconnected from voice', 'block': 'Blocked from this room',
-                  'revoke': 'Invitation revoked', 'unblock': 'Unblocked; invite them again if the room is hidden'}
-        await respond(interaction, f'✅ {labels[self.action]}: {discord.utils.escape_markdown(member.display_name)}.', room_id=self.channel_id)
+class RoomBrowserView(UserView):
+    def __init__(self, bot, actor, *, page=0):
+        super().__init__(bot, actor)
+        rooms = []
+        for room in list(bot.store.rooms.values()):
+            try:
+                _, channel = bot.service.accessible(room.channel_id, actor)
+            except RoomError:
+                continue
+            rooms.append((room, channel))
+        rooms.sort(key=lambda item: (item[1].name.casefold(), item[0].channel_id))
+        self.page = max(0, min(page, max(0, (len(rooms) - 1) // 25)))
+        self.total = len(rooms)
+        options = []
+        for room, channel in rooms[self.page * 25:(self.page + 1) * 25]:
+            status = 'Full — notification available' if bot.service.full(channel) else 'Space available'
+            occupancy = f'{len(channel.members)}/{channel.user_limit or "unlimited"}'
+            options.append(discord.SelectOption(label=channel.name[:100], value=str(room.channel_id),
+                                               description=f'{occupancy} · {status}'))
+        if options:
+            picker = discord.ui.Select(placeholder='Choose a public room…', options=options, row=0)
+            async def selected(interaction):
+                await bot.open_room(interaction, int(picker.values[0]))
+            picker.callback = selected
+            self.add_item(picker)
+        for label, step, disabled in [
+            ('Previous', -1, self.page == 0),
+            ('Next', 1, (self.page + 1) * 25 >= len(rooms)),
+        ]:
+            button = discord.ui.Button(label=label, disabled=disabled, row=1)
+            def callback_for(step):
+                async def callback(interaction):
+                    await self.bot.browse_for(interaction, page=self.page + step)
+                return callback
+            button.callback = callback_for(step)
+            self.add_item(button)
+        refresh = discord.ui.Button(label='Refresh rooms', row=1)
+        async def refresh_rooms(interaction):
+            await self.bot.browse_for(interaction, page=self.page)
+        refresh.callback = refresh_rooms
+        self.add_item(refresh)
+
 
 class SettingsModal(discord.ui.Modal):
     def __init__(self, bot, channel_id, action, current):
         super().__init__(title='Rename room' if action == 'rename' else 'Participant limit')
         self.bot, self.channel_id, self.action = bot, channel_id, action
-        self.value_input = discord.ui.TextInput(label='Room name' if action == 'rename' else 'Limit (0 means unlimited)',
+        self.value_input = discord.ui.TextInput(label='Room name' if action == 'rename' else 'Limit: 0 unlimited, or 5–99',
             default=current, min_length=1, max_length=100 if action == 'rename' else 2)
         self.add_item(self.value_input)
 
@@ -300,7 +252,7 @@ class SettingsModal(discord.ui.Modal):
             self.bot.service.authorize(self.channel_id, interaction.user)
             value = self.value_input.value
             if self.action == 'limit' and (not value.isascii() or not value.isdigit()):
-                raise RoomError('Enter a whole number from 0 to 99. Use 0 for unlimited.')
+                raise RoomError('Enter 5–99 people, or 0 for unlimited.')
             await interaction.response.defer(ephemeral=True)
             if self.action == 'rename':
                 await self.bot.service.rename(self.channel_id, interaction.user, value)
@@ -346,6 +298,7 @@ class RoomBot(commands.Bot):
             atomic_json(self.data_dir / 'health.json', {'ready': self.is_ready() and self.initialized,
                 'updated': time.time(), 'guilds': [guild.id for guild in self.guilds], 'rooms': len(self.store.rooms),
                 'private_responses': len(self.responses.entries),
+                'notification_opt_ins': sum(len(room.waiting) for room in self.store.rooms.values()),
                 'persistent_views': len(self.persistent_views), 'initialization_error': self.initialization_error})
             await asyncio.sleep(20)
 
@@ -374,6 +327,10 @@ class RoomBot(commands.Bot):
         if channel.id in self.store.rooms:
             await self.service.forget(channel.id)
 
+    async def on_guild_channel_update(self, before, after):
+        if self.initialized and isinstance(after, discord.VoiceChannel) and after.id in self.store.rooms:
+            await self.service.channel_update(after)
+
     async def close(self):
         await self.service.close()
         await self.responses.close()
@@ -382,17 +339,44 @@ class RoomBot(commands.Bot):
             await asyncio.gather(self.heartbeat_task, return_exceptions=True)
         await super().close()
 
-    async def create_for(self, interaction, *, guests=()):
+    async def create_for(self, interaction):
         if interaction.guild is None:
             raise RoomError('Create your room inside the server.')
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
-        room = await self.service.create(interaction.user, guests=guests)
+        room = await self.service.create(interaction.user)
+        voice = interaction.user.voice
+        if self.service.full(self.service.channel(room)) and not (voice and voice.channel and voice.channel.id == room.channel_id):
+            return await self.open_room(interaction, room.channel_id)
         join_note = ('Open the room link and join within 60 seconds of creation. '
                      if not interaction.user.voice and room.sequence == 0 else '')
         await respond(interaction, f'Your room is ready: {self.service.link(room)}\n'
-            f'Privacy: **{MODES[room.mode][0]}**. {join_note}Open the room’s chat or use /room for controls.',
+            f'**Public room.** {join_note}Open the room’s chat or use /room for controls.',
             embed=self.service.embed(room, self.service.channel(room)), view=DashboardView(self, room.channel_id), room_id=room.channel_id)
+
+    async def browse_for(self, interaction, *, page=0):
+        if interaction.guild is None:
+            raise RoomError('Find rooms inside the server.')
+        view = RoomBrowserView(self, interaction.user, page=page)
+        content = (f'Choose a room to join or get notified when it has space. '
+                   f'Page {view.page + 1} of {max(1, (view.total + 24) // 25)}.' if view.total
+                   else 'No public rooms are open yet. Use Create a room to start one.')
+        await respond(interaction, content, view=view)
+
+    async def open_room(self, interaction, channel_id, *, notice=None):
+        room, channel = self.service.accessible(channel_id, interaction.user)
+        full = self.service.full(channel)
+        inside = interaction.user.voice and interaction.user.voice.channel and interaction.user.voice.channel.id == channel_id
+        content = ('You are already in this room.' if inside else
+                   'This room is full. Choose **Notify me** to receive one DM when space opens. '
+                   'Notifications do not reserve a place. Enable DMs from server members.' if full
+                   else 'Space is available. Use **Join voice room**. Availability may change before you join; '
+                        'use **Check again** if Discord says the room is full.')
+        if interaction.user.id in room.waiting:
+            content += '\n🔔 Your one-time notification is enabled. You can cancel it below.'
+        await respond(interaction, (notice + '\n' if notice else '') + content,
+                      room_id=channel_id, embed=self.service.embed(room, channel),
+                      view=AvailabilityView(self, interaction.user, room, channel))
 
     async def manage_for(self, interaction):
         if interaction.guild is None:
@@ -410,9 +394,9 @@ class RoomBot(commands.Bot):
         async def setup(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
             settings = await self.service.setup(interaction.guild)
-            await respond(interaction, f'✅ Voice Dashboard is ready: <#{settings["controls_channel_id"]}>. New rooms start hidden.')
+            await respond(interaction, f'✅ Voice Dashboard is ready: <#{settings["controls_channel_id"]}>. New rooms are public with no limit.')
 
-        @self.tree.command(name='createvc', description='Create your hidden voice room, or return to your existing room.')
+        @self.tree.command(name='createvc', description='Create a public voice room with no limit, or return to your room.')
         @app_commands.guild_only()
         async def createvc(interaction: discord.Interaction):
             await self.create_for(interaction)
@@ -422,23 +406,26 @@ class RoomBot(commands.Bot):
         async def room(interaction: discord.Interaction):
             await self.manage_for(interaction)
 
-        @self.tree.command(name='invite', description='Host: give a server member access to your room and its chat.')
+        @self.tree.command(name='rooms', description='Find a public room or opt into a notification when a full room has space.')
         @app_commands.guild_only()
-        @app_commands.describe(user_to_invite='The server member to invite')
-        async def invite(interaction: discord.Interaction, user_to_invite: discord.Member):
-            room = self.service.managed(interaction.user)
-            await interaction.response.defer(ephemeral=True)
-            await self.service.invite(room.channel_id, interaction.user, [user_to_invite])
-            await respond(interaction, f'✅ Access granted to {user_to_invite.mention}. Share this room link: {self.service.link(room)}', room_id=room.channel_id)
+        async def rooms(interaction: discord.Interaction):
+            await self.browse_for(interaction)
 
-        @self.tree.command(name='kick', description='Host: disconnect someone from your room; they may rejoin.')
+        @self.tree.command(name='notify', description='DM me once when this full temporary voice room has a free place.')
         @app_commands.guild_only()
-        @app_commands.describe(user_to_kick='The person to disconnect (use Manage people to block rejoining)')
-        async def kick(interaction: discord.Interaction, user_to_kick: discord.Member):
-            room = self.service.managed(interaction.user)
+        async def notify(interaction: discord.Interaction, channel: discord.VoiceChannel):
             await interaction.response.defer(ephemeral=True)
-            await self.service.manage_member(room.channel_id, interaction.user, user_to_kick, 'disconnect')
-            await respond(interaction, '✅ Disconnected from voice. To prevent rejoining, use **Manage people → Block**.', room_id=room.channel_id)
+            subscribed = await self.service.subscribe(channel.id, interaction.user)
+            await self.open_room(interaction, channel.id, notice=(
+                '✅ One-time DM enabled. Enable DMs from server members. No place is reserved.'
+                if subscribed else 'Space is already available — you can join now.'))
+
+        @self.tree.command(name='unnotify', description='Cancel my availability notification for a temporary voice room.')
+        @app_commands.guild_only()
+        async def unnotify(interaction: discord.Interaction, channel: discord.VoiceChannel):
+            await interaction.response.defer(ephemeral=True)
+            await self.service.unsubscribe(channel.id, interaction.user)
+            await respond(interaction, 'Your notification has been cancelled.', room_id=channel.id)
 
         @self.tree.error
         async def command_error(interaction, error):

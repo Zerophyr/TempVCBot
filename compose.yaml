@@ -2,7 +2,7 @@ name: tempvcbot
 services:
   bot:
     build: .
-    image: tempvcbot:voice-dashboard-v3
+    image: tempvcbot:public-rooms-v4
     container_name: tempvcbot
     restart: unless-stopped
     init: true

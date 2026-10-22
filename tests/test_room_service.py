@@ -35,6 +35,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         self.guild = MagicMock(spec=discord.Guild)
         self.guild.id = 1
+        self.guild.name = 'Test server'
         self.guild.owner_id = 999
         self.guild.me = member(9, self.guild, bot=True)
         self.guild.default_role = MagicMock(spec=discord.Role)
@@ -88,61 +89,17 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         if hasattr(self, 'service'):
             await self.service.close()
 
-    async def test_only_host_can_invite(self):
-        with self.assertRaisesRegex(service_module.RoomError, 'host'):
-            await self.service.invite(100, self.friend, [self.other])
-        self.channel.edit.assert_not_awaited()
-
     async def test_stale_host_cannot_submit_after_ownership_changes(self):
         self.room.host_id = 20
         with self.assertRaisesRegex(service_module.RoomError, 'host'):
-            await self.service.set_mode(100, self.creator, 'public')
+            await self.service.rename(100, self.creator, 'Another name')
 
-    async def test_invite_grants_all_access_and_persists(self):
-        await self.service.invite(100, self.creator, [self.other])
-        updated = self.store.rooms[100]
-        self.assertIn(30, updated.invited)
-        overwrite = self.channel.edit.call_args.kwargs['overwrites'][self.other]
-        self.assertTrue(overwrite.view_channel)
-        self.assertTrue(overwrite.connect)
-        self.assertTrue(overwrite.send_messages)
-        self.assertIn(30, RoomStore(self.store.path).rooms[100].invited)
-
-    async def test_failed_permission_update_does_not_save_invitation(self):
-        self.channel.edit.side_effect = discord.Forbidden(MagicMock(status=403), 'denied')
-        with self.assertRaises(discord.Forbidden):
-            await self.service.invite(100, self.creator, [self.other])
-        self.assertNotIn(30, self.store.rooms[100].invited)
-
-    async def test_cross_server_invitation_is_rejected(self):
-        stranger = member(40, SimpleNamespace(id=2))
-        with self.assertRaisesRegex(service_module.RoomError, 'server'):
-            await self.service.invite(100, self.creator, [stranger])
-
-    async def test_bots_cannot_be_invited_or_become_host(self):
+    async def test_bots_cannot_create_rooms_or_become_host(self):
         with self.assertRaises(service_module.RoomError):
-            await self.service.invite(100, self.creator, [self.guild.me])
+            await self.service.create(self.guild.me)
         self.channel.members = [self.guild.me, self.friend]
         await self.service.reconcile(100)
         self.assertEqual(self.store.rooms[100].host_id, 20)
-
-    async def test_creator_cannot_be_blocked_by_temporary_host(self):
-        self.room.host_id = 20
-        with self.assertRaisesRegex(service_module.RoomError, 'creator'):
-            await self.service.manage_member(100, self.friend, self.creator, 'block')
-
-    async def test_block_disconnects_and_prevents_reentry(self):
-        await self.service.manage_member(100, self.creator, self.friend, 'block')
-        self.friend.move_to.assert_awaited_once_with(None, reason='Blocked from temporary room by its host')
-        self.assertIn(20, self.store.rooms[100].blocked)
-        self.assertFalse(self.channel.edit.call_args.kwargs['overwrites'][self.friend].connect)
-
-    async def test_revoke_removes_invite_but_public_access_still_applies(self):
-        self.room.invited.add(30)
-        self.room.mode = 'public'
-        await self.service.manage_member(100, self.creator, self.other, 'revoke')
-        self.assertNotIn(30, self.store.rooms[100].invited)
-        self.assertNotIn(30, self.store.rooms[100].blocked)
 
     async def test_creator_return_restores_ownership_immediately(self):
         self.room.host_id = 20
@@ -155,14 +112,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.reconcile(100)
         self.assertEqual(self.store.rooms[100].host_id, 30)
 
-    async def test_new_room_is_hidden_at_creation_not_after_creation(self):
+    async def test_new_room_is_public_at_creation(self):
         self.store.rooms.clear()
         await self.service.create(self.creator)
         overwrites = self.category.create_voice_channel.call_args.kwargs['overwrites']
-        self.assertFalse(overwrites[self.role].view_channel)
+        self.assertTrue(overwrites[self.role].view_channel)
         self.assertTrue(overwrites[self.creator].send_messages)
         self.creator.move_to.assert_awaited_once_with(self.channel)
-        self.assertEqual(self.store.rooms[100].mode, 'hidden')
+        self.assertTrue(overwrites[self.role].connect)
 
     async def test_duplicate_create_returns_existing_room_without_creating_another(self):
         room = await self.service.create(self.creator)
@@ -206,16 +163,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.voice_update(self.friend, after, before)
         self.assertEqual(self.room.join_order[20], 3)
 
-    async def test_hide_preserves_current_participants_chat_access(self):
-        self.room.mode = 'public'
-        await self.service.set_mode(100, self.creator, 'hidden')
-        self.assertIn(20, self.store.rooms[100].invited)
-        self.assertTrue(self.channel.edit.call_args.kwargs['overwrites'][self.friend].send_messages)
-
     async def test_limit_accepts_zero_and_99_but_rejects_out_of_range(self):
-        for value in [0, 99]:
+        for value in [0, 5, 99]:
             await self.service.set_limit(100, self.creator, value)
-        for value in [-1, 100]:
+        for value in [-1, 1, 2, 3, 4, 100]:
             with self.assertRaises(service_module.RoomError):
                 await self.service.set_limit(100, self.creator, value)
 
@@ -226,14 +177,14 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.rename(100, self.creator, 'German practice')
         self.channel.edit.assert_any_await(name='German practice', reason='Renamed by temporary room host')
 
-    async def test_legacy_migration_preserves_creator_and_existing_visibility(self):
+    async def test_legacy_migration_preserves_creator_and_order(self):
         self.store.rooms.clear()
         legacy = Path(self.directory.name) / 'channels.json'
         legacy.write_text(json.dumps({'100': 10}), encoding='utf-8')
         self.channel.overwrites = {self.guild.default_role: discord.PermissionOverwrite(connect=True)}
         await self.service.migrate_legacy(legacy)
         self.assertEqual(self.store.rooms[100].creator_id, 10)
-        self.assertEqual(self.store.rooms[100].mode, 'public')
+        self.assertEqual(self.store.rooms[100].join_order, {10: 1, 20: 2})
         self.assertEqual(json.loads(legacy.read_text()), {'100': 10})
 
     async def test_controls_created_in_managed_category_not_restricted_entry_category(self):
@@ -253,30 +204,6 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.category.create_text_channel.assert_awaited_once()
         parent.create_text_channel.assert_not_awaited()
         self.assertEqual(settings['controls_channel_id'], 600)
-
-    async def test_creation_grants_selected_guests_hidden_access_before_channel_exists(self):
-        self.store.rooms.clear()
-        await self.service.create(self.creator, guests=[self.friend, self.other])
-        overwrites = self.category.create_voice_channel.call_args.kwargs['overwrites']
-        for guest in [self.friend, self.other]:
-            self.assertTrue(overwrites[guest].view_channel)
-            self.assertTrue(overwrites[guest].connect)
-            self.assertTrue(overwrites[guest].send_messages)
-        self.assertFalse(overwrites[self.role].view_channel)
-        self.assertEqual(self.store.rooms[100].invited, {20, 30})
-
-    async def test_invalid_creation_guest_does_not_create_a_room(self):
-        self.store.rooms.clear()
-        stranger = member(40, SimpleNamespace(id=2))
-        with self.assertRaisesRegex(service_module.RoomError, 'server'):
-            await self.service.create(self.creator, guests=[stranger])
-        self.category.create_voice_channel.assert_not_awaited()
-
-    async def test_existing_creator_cannot_add_guests_while_another_host_is_active(self):
-        self.room.host_id = 20
-        with self.assertRaises(service_module.RoomError):
-            await self.service.create(self.creator, guests=[self.other])
-        self.channel.edit.assert_not_awaited()
 
     async def test_room_deletion_cleans_private_controls_and_stops_views(self):
         self.channel.members = []

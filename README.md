@@ -1,93 +1,146 @@
-# TempVCBot â€” DeutschDen fork
+# TempVCBot — public rooms preview
 
-Create a hidden voice room in one click, invite friends, and manage it using Discord buttons. Based on [RitvikRRy/TempVCBot](https://github.com/RitvikRRy/TempVCBot), upstream commit `bb25cd267808fd0aac112a631c61945d1e4aa4d1`.
+**Unreleased local branch. Do not deploy until the user explicitly approves.**
 
-## For members
+This branch replaces private rooms and room moderation with public voice rooms,
+simple host settings and opted-in availability notifications. The existing
+Hetzner deployment and live Discord dashboard have not been changed.
 
-1. Open **#voice-dashboard** and click **Create a room**, or **Create with friends** to select up to ten people before creating it.
-2. Your room starts **hidden**. If you are already in voice, the bot moves you into it. Otherwise open the provided room link and join within 60 seconds.
-3. Selected friends can immediately see and join the hidden room and write in its chat. Other members cannot see it. You can invite more people later.
-4. Open the room's text chat for its management panel. You can also use **Manage my room** in #voice-dashboard or `/room` at any time. The launcher is pinned in #voice-dashboard; Discord does not support pinning messages in voice-channel chat.
+Based on [RitvikRRy/TempVCBot](https://github.com/RitvikRRy/TempVCBot), upstream
+commit `bb25cd267808fd0aac112a631c61945d1e4aa4d1`.
 
-Everyone with room access can read and write in its chat, speak and use webcam/video. Discord server administrators retain access to restricted rooms.
+## Member workflow in this preview
 
-### Controls (current host only)
+1. Open **#voice-dashboard** and select **Create a room**. Every new room is
+   public to members with normal voice access and has **no user limit**.
+2. If already in voice, the bot moves you into your new room. Otherwise open
+   the room link and join within **60 seconds** before an unused room expires.
+3. Use **Manage my room**, `/room`, or the room chat panel for settings. Only
+   the current host can rename a room or change its size.
+4. Everyone with normal voice access can read and write in the room's chat,
+   join voice and use webcam/video. No invitation is needed. The bot has no
+   private/invite-only modes, Create with friends, invitation-access controls,
+   kick, disconnect, block, unblock or ban commands.
 
-- **Invite friends:** search for and select up to ten server members, then **Invite selected**. This grants visibility, voice and chat access together. Share the room link, or explicitly choose **Invite + notify by DM**. Failed DM delivery does not undo an invitation.
-- **Privacy:** **Hidden** means only you and invitees can see/join; **Visible Â· invite-only** lets the normal voice audience see/chat but requires an invitation to join voice; **Public** lets that audience join freely. Existing participants retain access when a room is locked or hidden.
-- **Manage people:** **Disconnect** removes someone from voice but permits rejoining; **Block** removes visibility/access and disconnects them; **Revoke invitation** removes explicit access (public access still applies); **Unblock** removes the block, after which hidden rooms require another invitation. The creator, current host and server administrators are protected from room-level removal through this panel.
-- **Rename:** a single-line name, 1â€“100 characters.
-- **User limit:** 0â€“99; 0 means unlimited. Discord privileged users can bypass channel limits.
+The optional participant limit accepts **0 (unlimited)** or **5–99**. Setting
+a lower limit never disconnects people already inside. Discord members with
+privileged permissions may bypass a voice channel's native limit.
 
-The permanent launcher and ordinary room panels have no ten-minute timeout and are restored after bot restart. Personal controls reuse one reply per person and room. They are removed when the room closes, when replaced, during a graceful bot shutdown, or after 14 minutes before Discord's interaction token expires. Reopen **Manage my room** or `/room` whenever needed. Member-selection menus last five minutes. There is no dependency on enabling direct messages.
+## Full rooms and one-time notifications
 
-Discord does not let a bot retroactively remove old private replies after their interaction token expires, or after an abrupt process loss discards the in-memory token. Private replies left by older versions may need **Dismiss message** once. Tokens are never persisted to disk.
+Use **Find a room** in the dashboard or `/rooms`. The member picker lists
+current occupancy and availability, with pages of up to 25 rooms. You can
+also select **Join / Notify me** on a room's chat panel.
 
-### Ownership and cleanup
+- If there is space, select **Join voice room** to open the room in Discord.
+- If full, select **Notify me when a place opens**. This explicitly opts you
+  into a **single DM** for that room. Enable DMs from server members.
+- Reopen the room card and select **Cancel my notification**, or use
+  `/unnotify channel: <room>`, to cancel. Only your own opt-in is affected.
+- `/notify channel: <room>` is an alternative way to subscribe to a full
+  managed room. An already available room shows a join link instead.
 
-The **creator** remains associated with their room. The **host** is the person currently allowed to manage it.
+Discord does not expose a supported failed-join event or let bots alter the
+native “channel full” dialog. A failed native join therefore cannot trigger a
+bot prompt automatically. Use the bot's room checker when a room is full.
+If capacity changes after a check, select **Check again**.
+This design follows Discord's documented
+[voice-state events](https://docs.discord.com/developers/events/gateway-events#voice-state-update).
 
-- When the host leaves, after a 10-second grace the earliest-joined human still present becomes host.
-- Returning members get a new arrival order. Mute/deafen/camera changes do not change arrival order.
-- When the original creator rejoins, ownership immediately returns to them. Room settings, invitations and blocks survive handover.
-- **Create a room** returns a creator to their existing room. A person may create one room per server; temporarily hosting another person's room does not consume that slot.
-- Rooms are deleted 10 seconds after the last member leaves. A never-joined room created outside voice has an initial 60-second join window.
+Notifications are not reservations or a join queue: current subscribers are
+notified once when space is available, and places may fill again. The bot
+never moves subscribers automatically. Repeat subscriptions are deduplicated.
+Opt-ins survive restart and host handover; joining the target room or deleting
+it clears the relevant opt-ins. Departures, limit increases/removal, channel
+updates and restart recovery all check availability.
 
-### Slash commands
+Users who leave the server or lose room access are skipped. Closed DMs or an
+unsuccessful delivery consume that one-shot notification without repeated
+attempts. Delivery is best effort: a process crash after claiming a notification
+can lose that attempt. Another user's failed DM does not stop other deliveries.
+
+## Ownership and cleanup
+
+- A creator can have one room per server. Temporarily hosting another room
+  does not consume this slot.
+- After a **10-second grace** when the host leaves, the earliest-joined human
+  still present becomes host. Rejoining gives a new arrival order; mute,
+  deafen and video changes do not change it.
+- The original creator regains hosting when they return. Room settings and
+  notification subscriptions are preserved.
+- Rooms close **10 seconds** after everyone leaves. A never-joined room has
+  an initial **60-second** join window. Room chat disappears with the channel.
+- The permanent dashboard and room panels have no ten-minute timeout.
+  Personal menus can be reopened anytime. They reuse replies and are cleaned
+  up on room deletion, replacement, graceful shutdown, or before their
+  interaction token expires. Old replies from a previous process can require
+  manual dismissal; interaction tokens are never persisted.
+
+## Commands in this preview
 
 | Command | Purpose |
 |---|---|
-| `/createvc` | Create or return to your room |
-| `/room` | Open controls for the room you host |
-| `/invite user_to_invite: @Member` | Grant room and chat access |
-| `/kick user_to_kick: @Member` | Disconnect; use Manage people to block |
-| `/setup` | Admin configuration; requires Manage Channels |
+| `/createvc` | Create a public unlimited room or return to your room |
+| `/room` | Open settings for the room you host |
+| `/rooms` | Find public rooms and check availability |
+| `/notify channel:` | Opt into one DM when a full managed room has space |
+| `/unnotify channel:` | Cancel your own availability notification |
+| `/setup` | Admin: configure the managed category and dashboard |
 
-## Server setup
+The old `/invite` and `/kick` commands will be removed by command sync **only
+when this version is eventually started after deployment approval**.
 
-Use the **bot** and **applications.commands** scopes and enable **Server Members Intent**. Message Content and Presence intents are not required.
+## Local development and tests
 
-The bot needs View Channels, Manage Channels, Manage Roles, Move Members, Connect, Speak, Voice Activity, Video, Send Messages, Read Message History, Embed Links, Attach Files, Add Reactions, Use Application Commands and **Pin Messages**. Administrator is not required. It must have access to its managed category.
-
-`/setup` creates or updates the bot-only **#voice-dashboard** launcher in **Temporary Channels**, the category managed by the bot. Audience roles can view/use the launcher but cannot post there. Members can still write in their room chats. Updates reuse the existing dashboard channel and pinned message, preserving their IDs and history.
-
-The legacy **âž• Create VC** entry is retired automatically. An empty entry with no chat messages is deleted. If it has chat history, or history cannot be checked, it becomes a hidden **archived-create-vc** channel in the managed category so history is preserved. Occupied entries are left alone until the final participant leaves. The bot never recreates this entry.
-
-## Development
-
-Python 3.12+ and discord.py 2.7.1.
+Python 3.12+ and discord.py 2.7.1. All tests use temporary state and mocked
+Discord boundaries; no token, gateway login, live DM or server access is needed.
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall -q TempVCBot.py room_state.py room_service.py control_messages.py
+git diff --check
 ```
 
-Do not start a second gateway client using the production token while the server bot is running. Tests run without a token or Discord connection.
+Never start `TempVCBot.py` or Compose against production credentials as a test.
+Constructing `RoomBot` does not connect; the script entry point does.
 
-Modules: `room_state.py` contains persisted ownership and permission policy; `room_service.py` manages Discord actions and lifecycle; `TempVCBot.py` contains persistent views, menus and commands; `control_messages.py` manages private reply cleanup using in-memory callbacks. Each action checks the current host again, so stale controls cannot grant a former host access.
+Modules: `room_state.py` stores ownership, permission policy and opt-ins;
+`room_service.py` applies Discord actions and lifecycle; `TempVCBot.py`
+provides persistent views, menus and commands; `control_messages.py` manages
+in-memory private-response cleanup.
 
-## Deployment and persistence
+## Future rollout and migration — not performed
 
-The existing Hetzner deployment is standalone Docker Compose at `/opt/tempvcbot`, outside the Coolify dashboard. No ports are exposed. It uses UID/GID 10001, a read-only root, resource limits and rotating logs.
+The existing standalone deployment is `/opt/tempvcbot` on Hetzner, outside
+Coolify. Production previously used `tempvcbot:voice-dashboard-v3`; the new
+Compose image name is `tempvcbot:public-rooms-v4`, so the preview cannot replace
+the old image tag merely by building it. No image has been built on the server
+or container restarted for this change.
 
-```sh
-cd /opt/tempvcbot
-docker compose build bot
-docker compose up -d --no-build
-docker compose ps
-docker compose logs --tail 100 bot
-```
+After explicit approval, inspect the then-current container, active rooms and
+configuration, and back up source, Compose and **all production data** before
+deployment. Keep `/opt/tempvcbot/secrets` untouched. The token is read from
+`DISCORD_TOKEN_FILE`; never put it in source, logs or an image.
 
-Keep `/opt/tempvcbot/data` and `/opt/tempvcbot/secrets` when updating. The token is read from `DISCORD_TOKEN_FILE` (default `/run/secrets/discord_token`); never commit it or put it in the image. Configuration and runtime state are excluded from Git and Docker build context.
+- `config.json`: managed category, dashboard and pinned launcher IDs. Existing
+  dashboard IDs/history are reused; dashboard revision becomes 4.
+- `rooms.json`: schema 3 stores creator, host, arrival order, panel, timestamps
+  and waiting member IDs. Reading a schema-2 file converts it in memory without
+  writing during load. Saving writes schema 3 and omits removed privacy,
+  invitation and block fields.
+- At future startup, active old rooms receive public overwrites, removing old
+  per-member restrictions. Legacy limits 1–4 become 5; 0 and 5–99 are preserved.
+  Channel IDs, host/creator, panel IDs, arrival order and timestamps are retained.
+- `channels.json`: legacy ownership is imported only if rooms.json is absent.
+- `health.json`: initialization/gateway readiness, room count, private replies
+  and notification opt-ins. Failed initialization cannot report ready.
 
-- `config.json`: category, dashboard channel and launcher message IDs, plus a legacy archive/deferred-retirement ID when applicable.
-- `rooms.json`: version 2 state, with creator, current host, mode, invitation/block lists, join sequence and panel ID.
-- `channels.json`: preserved legacy ownership file. Imported once if rooms.json does not yet exist; active legacy rooms retain their existing public/visible mode.
-- `health.json`: gateway readiness, initialization, tracked private replies and heartbeat. Initialization failures prevent a false healthy status.
+The retired **➕ Create VC** entry is not recreated. Archived entry chat stays
+hidden to preserve history; it is not an active room or a private-room feature.
 
-On restart, persisted join order is retained for members still present. New arrivals while the bot was offline have no exact observed join time; their fallback order is deterministic. Deleted panels are recreated when controls reopen or the bot restarts. Deleted rooms are removed from tracking.
+Rollback to the old private-room version requires its original schema-2 data
+backup. The new schema intentionally cannot restore removed privacy or block
+rules; never downgrade against schema-3 state without a reviewed recovery plan.
 
-Before the initial v2 deployment, source/configuration/data were backed up to `/opt/tempvcbot/backups/before-room-controls-20261018`. For rollback, stop the container, retain a separate snapshot of current data, restore that backup's source/Compose files and data, then run `docker compose up -d --no-build` with the original `tempvcbot:bb25cd2-local` image. A rollback to v1 cannot preserve all v2 features; inspect active rooms first.
-
-The v3 Voice Dashboard deployment keeps a separate v2 source/data backup in `/opt/tempvcbot/backups/before-voice-dashboard-v3-20261018`. Reverting code does not recreate a deleted Discord entry channel; v2 `/setup` can recreate one if required. Retain current room data when rolling back to v2 and inspect channel configuration before restarting.
+See [implementation plan](docs/plans/2026-10-22-public-rooms.md) and
+[member guide preview](docs/public-rooms-user-guide.md).
