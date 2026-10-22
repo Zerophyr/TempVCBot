@@ -1,6 +1,6 @@
-# Remaining features — public rooms preview
+# Features — public voice rooms
 
-**Implemented locally; not pushed or deployed. Awaiting explicit rollout approval.**
+**Deployed to DeutschDen on 22 October 2026 after explicit approval. Runtime: `479f212`.**
 
 | Feature | Remaining behavior |
 |---|---|
@@ -14,7 +14,7 @@
 | Ownership transfer | After a 10-second grace when the host leaves, the earliest-joined remaining human becomes host. The original creator regains hosting on return. |
 | Visible owner | Current owner mention and user ID in the room chat card; owner name and ID in native channel status, updated on handover and creator return. |
 | Change accountability | Successful bot name/limit edits announce actor ID and before/after values in room chat; Discord audit-log reasons also identify the actor and current host. Staff overrides identify staff separately. |
-| Permanent controls | Pinned dashboard and room chat panels; personal menus can be reopened anytime. |
+| Permanent controls | Pinned dashboard and persistent room chat panels; personal menus can be reopened anytime. |
 | One room per creator | Temporarily hosting another person's room does not consume that slot. Existing rooms are reused, respecting effective access and capacity. |
 | Cleanup | Empty rooms close after 10 seconds; never-joined rooms have 60 seconds. Associated chat, temporary controls and notification opt-ins are cleaned up. |
 | Recovery | Ownership, arrival order, panel IDs and notifications persist. One-time legacy migration converts active rooms to public; later restarts preserve manual staff settings. |
@@ -39,6 +39,9 @@ Discord's native “channel full” dialog cannot be modified. The availability
 option is provided through the bot's room checker or `/notify`. DMs must be
 enabled; delivery is best effort and a notification does not reserve a slot.
 
-No live server checks, command sync, Discord moderation actions, DMs or
-deployment have been performed for this preview. Runtime behavior has been
-verified with automated tests using mocked Discord operations.
+All 134 automated tests pass locally and in the Linux ARM64 image. Live checks
+verified the dashboard, command sync, a disposable public room, chat/video
+permissions, ownership indicators and attributed name/limit changes. The test
+room was removed; no users were moved or DMs sent. Notification delivery and
+multi-user voice handover retain automated coverage; they were not exercised
+with real participants during deployment.

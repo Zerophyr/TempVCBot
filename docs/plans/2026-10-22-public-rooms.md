@@ -1,7 +1,8 @@
-# Public rooms and availability alerts — local implementation only
+# Public rooms and availability alerts
 
-Status: IMPLEMENTED LOCALLY, NOT DEPLOYED. No server, live Discord configuration, gateway client,
-remote push, or production data changes are authorized in this task.
+Status: DEPLOYED on 22 October 2026 after the user's explicit deployment and
+push instruction. Runtime source: `479f212`. The original implementation was
+held locally until that approval; the requirements below record that workflow.
 
 ## Requested behavior
 

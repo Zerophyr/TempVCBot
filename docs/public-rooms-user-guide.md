@@ -1,6 +1,6 @@
-# Voice rooms — preview of the upcoming update
+# Voice rooms — how to use them
 
-**Not live yet. These instructions apply after the update is approved and deployed.**
+**Live in DeutschDen from 22 October 2026.**
 
 ## Start a room
 

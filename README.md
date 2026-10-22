@@ -1,15 +1,16 @@
-# TempVCBot — public rooms preview
+# TempVCBot — public voice rooms
 
-**Unreleased local branch. Do not deploy until the user explicitly approves.**
+**Deployed to DeutschDen on 22 October 2026 after explicit rollout approval.**
 
-This branch replaces private rooms and room moderation with public voice rooms,
-simple host settings and opted-in availability notifications. The existing
-Hetzner deployment and live Discord dashboard have not been changed.
+This version replaces private rooms and room moderation with public voice rooms,
+simple host settings, visible ownership and opted-in availability notifications.
+The standalone Hetzner deployment uses `tempvcbot:public-rooms-v4`, with runtime
+source commit `479f2127ff286000598ffaf3a1329a516b7b7bec`.
 
 Based on [RitvikRRy/TempVCBot](https://github.com/RitvikRRy/TempVCBot), upstream
 commit `bb25cd267808fd0aac112a631c61945d1e4aa4d1`.
 
-## Member workflow in this preview
+## Member workflow
 
 1. Open **#voice-dashboard** and select **Create a room**. Every new room is
    public to members with normal voice access and has **no user limit**.
@@ -126,7 +127,7 @@ can lose that attempt. Another user's failed DM does not stop other deliveries.
   interaction token expires. Old replies from a previous process can require
   manual dismissal; interaction tokens are never persisted.
 
-## Commands in this preview
+## Commands
 
 | Command | Purpose |
 |---|---|
@@ -137,8 +138,8 @@ can lose that attempt. Another user's failed DM does not stop other deliveries.
 | `/unnotify channel:` | Cancel your own availability notification |
 | `/setup` | Admin: configure the managed category and dashboard |
 
-The old `/invite` and `/kick` commands will be removed by command sync **only
-when this version is eventually started after deployment approval**.
+The old `/invite` and `/kick` commands were removed by command sync during
+the public-room deployment.
 
 ## Local development and tests
 
@@ -159,15 +160,15 @@ Modules: `room_state.py` stores ownership, permission policy and opt-ins;
 provides persistent views, menus and commands; `control_messages.py` manages
 in-memory private-response cleanup.
 
-## Future rollout and migration — not performed
+## Deployment, migration and recovery
 
-The existing standalone deployment is `/opt/tempvcbot` on Hetzner, outside
-Coolify. Production previously used `tempvcbot:voice-dashboard-v3`; the new
-Compose image name is `tempvcbot:public-rooms-v4`, so the preview cannot replace
-the old image tag merely by building it. No image has been built on the server
-or container restarted for this change.
+The standalone deployment is `/opt/tempvcbot` on Hetzner, outside Coolify.
+Production uses `tempvcbot:public-rooms-v4`; the former
+`tempvcbot:voice-dashboard-v3` image is retained for recovery. Before cutover,
+the ARM64 image passed all 134 offline tests on the server. The live update
+retained the existing dashboard and launcher IDs, with six current commands.
 
-After explicit approval, inspect the then-current container, active rooms and
+Before future updates, inspect the then-current container, active rooms and
 configuration, and back up source, Compose and **all production data** before
 deployment. Keep `/opt/tempvcbot/secrets` untouched. The token is read from
 `DISCORD_TOKEN_FILE`; never put it in source, logs or an image.
@@ -180,7 +181,7 @@ deployment. Keep `/opt/tempvcbot/secrets` untouched. The token is read from
   this is discarded after successful migration. Reading a schema-2 file converts it in memory without
   writing during load. Saving writes schema 3 and omits removed privacy,
   invitation and block fields.
-- At the first future startup, active old rooms receive public overwrites,
+- On their first restore with this version, active old rooms receive public overwrites,
   removing the known old bot privacy, invitation and host-block rules.
   Unrelated moderator overwrites and values differing from that known baseline
   are preserved. A manual value identical to an old bot rule cannot be
@@ -205,9 +206,21 @@ substitute for current capacity while sending a batch of DMs.
 The retired **➕ Create VC** entry is not recreated. Archived entry chat stays
 hidden to preserve history; it is not an active room or a private-room feature.
 
+The deployment backup is
+`/opt/tempvcbot/backups/before-public-rooms-20261022T205822Z`. It contains the old
+source, Compose, image ID and a consistent pre-migration data archive. Secrets
+remain in their original mount. There were no active rooms at cutover; an
+empty schema-2 file remains readable and is persisted as schema 3 on the next
+room mutation.
+
+Live REST checks created a disposable public unlimited room, verified audience
+chat/video access and the owner indicator, renamed it, changed its limit to
+five and back to unlimited, and verified three attributed chat announcements.
+The verification room was deleted. No users were moved or DMs sent.
+
 Rollback to the old private-room version requires its original schema-2 data
 backup. The new schema intentionally cannot restore removed privacy or block
 rules; never downgrade against schema-3 state without a reviewed recovery plan.
 
 See [implementation plan](docs/plans/2026-10-22-public-rooms.md) and
-[member guide preview](docs/public-rooms-user-guide.md).
+[member guide](docs/public-rooms-user-guide.md).
