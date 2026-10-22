@@ -1,11 +1,11 @@
 # Features — public voice rooms
 
-**Deployed to DeutschDen on 22 October 2026 after explicit approval. Runtime: `479f212`.**
+**Deployed to DeutschDen after explicit approval. Runtime commit: `/opt/tempvcbot/SOURCE_COMMIT`.**
 
 | Feature | Remaining behavior |
 |---|---|
 | Create a room | Public to the normal voice audience; unlimited participants by default. |
-| Join and discovery | Find a room shows occupancy; Join / Notify me checks current availability. |
+| Join and discovery | /rooms shows occupancy; Join / Notify me checks current availability. The dashboard has only Create a room, Manage my room and Help. |
 | Chat and video | Members with room access can write in chat, speak and use webcam/video. |
 | Host settings | Rename; optional limit of 5–99, or 0 for unlimited. |
 | Staff priority | Owners/admins/mods can override settings without taking ownership; staff limits may be 1–99 or unlimited. |
@@ -31,7 +31,7 @@ Server, Manage Channels, Move/Mute/Deafen Members, Kick/Ban Members, or Timeout
 Members permissions. A role name is not an authorization check. Being a room
 host grants no Discord moderation permission.
 
-Staff use **Find a room → choose room → Manage room**, or `/room` while inside
+Staff use **/rooms → choose room → Manage room**, or `/room` while inside
 that room. All settings actions recheck authority. A moderator's Connect denial
 is respected, and host handover cannot clear manual moderation overwrites.
 

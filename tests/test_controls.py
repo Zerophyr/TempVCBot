@@ -57,7 +57,7 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
     async def test_launcher_is_persistent_with_stable_unique_ids(self):
         view = controls.LauncherView(self.bot)
         self.assertTrue(view.is_persistent())
-        self.assertEqual([item.custom_id for item in view.children], ['tempvc:create', 'tempvc:browse', 'tempvc:manage', 'tempvc:help'])
+        self.assertEqual([item.custom_id for item in view.children], ['tempvc:create', 'tempvc:manage', 'tempvc:help'])
 
     async def test_room_panel_is_persistent_and_scoped_to_room(self):
         view = controls.DashboardView(self.bot, 100)

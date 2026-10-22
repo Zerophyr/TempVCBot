@@ -17,7 +17,7 @@ from control_messages import ResponseTracker
 log = logging.getLogger(__name__)
 HELP = (
     '**Create:** use Create a room in Voice Dashboard. Rooms are public with no limit by default.\n'
-    '**Join:** use Find a room or Join / Notify me to check availability and open its voice link.\n'
+    '**Join:** use /rooms or Join / Notify me to check availability and open its voice link.\n'
     '**Full room:** choose Notify me for one DM when space opens. You can cancel anytime; '
     'enable server-member DMs. Notifications do not reserve a place or move you automatically.\n'
     '**Settings:** the current host can rename or set a limit: 5–99 people, or 0 for unlimited. '
@@ -29,7 +29,7 @@ HELP = (
     '**Who owns this room?** The room card shows the current owner and user ID; the voice status also identifies them. '
     'Ownership changes and bot name/limit changes are announced in room chat with the responsible user ID.\n'
     '**Server staff:** retain normal Discord removal, move, mute, kick and ban powers according to their permissions. '
-    'Staff can use Find a room → Manage room without becoming host.\n'
+    'Staff can use /rooms → choose a room → Manage room without becoming host.\n'
     '**Cleanup:** rooms disappear 10 seconds after everyone leaves. Rooms created outside voice '
     'allow 60 seconds for someone to join. Save anything you want to keep from the chat.'
 )
@@ -102,10 +102,6 @@ class LauncherView(SafeView):
     @discord.ui.button(label='Create a room', emoji='➕', style=discord.ButtonStyle.primary, custom_id='tempvc:create')
     async def create(self, interaction, button):
         await self.bot.create_for(interaction)
-
-    @discord.ui.button(label='Find a room', emoji='🔎', style=discord.ButtonStyle.primary, custom_id='tempvc:browse')
-    async def browse(self, interaction, button):
-        await self.bot.browse_for(interaction)
 
     @discord.ui.button(label='Manage my room', emoji='⚙️', custom_id='tempvc:manage')
     async def manage(self, interaction, button):

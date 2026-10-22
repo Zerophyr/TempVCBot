@@ -4,13 +4,16 @@
 
 This version replaces private rooms and room moderation with public voice rooms,
 simple host settings, visible ownership and opted-in availability notifications.
-The standalone Hetzner deployment uses `tempvcbot:public-rooms-v4`, with runtime
-source commit `479f2127ff286000598ffaf3a1329a516b7b7bec`.
+The standalone Hetzner deployment uses `tempvcbot:public-rooms-v4.1`; its runtime
+source commit is recorded in `/opt/tempvcbot/SOURCE_COMMIT`.
 
 Based on [RitvikRRy/TempVCBot](https://github.com/RitvikRRy/TempVCBot), upstream
 commit `bb25cd267808fd0aac112a631c61945d1e4aa4d1`.
 
 ## Member workflow
+
+The dashboard has three buttons: **Create a room**, **Manage my room** and **Help**.
+Room browsing remains available through `/rooms`.
 
 1. Open **#voice-dashboard** and select **Create a room**. Every new room is
    public to members with normal voice access and has **no user limit**.
@@ -30,7 +33,7 @@ privileged permissions may bypass a voice channel's native limit.
 ## Server staff always retain moderation authority
 
 Server owners, admins and moderators can override room settings without taking
-ownership: **Find a room → choose room → Manage room**, or `/room` while in it.
+ownership: **/rooms → choose room → Manage room**, or `/room` while in it.
 Staff may set **1–99** participants or **0 (unlimited)**. Ordinary hosts cannot
 use the staff exemption. Permission checks run again on each action, including
 modal submission, so a demoted staff member cannot reuse old controls.
@@ -79,7 +82,7 @@ See Discord's [voice-channel status endpoint](https://docs.discord.com/developer
 
 ## Full rooms and one-time notifications
 
-Use **Find a room** in the dashboard or `/rooms`. The member picker lists
+Use `/rooms`. The member picker lists
 current occupancy and availability, with pages of up to 25 rooms. You can
 also select **Join / Notify me** on a room's chat panel.
 
@@ -163,7 +166,7 @@ in-memory private-response cleanup.
 ## Deployment, migration and recovery
 
 The standalone deployment is `/opt/tempvcbot` on Hetzner, outside Coolify.
-Production uses `tempvcbot:public-rooms-v4`; the former
+Production uses `tempvcbot:public-rooms-v4.1`; the former
 `tempvcbot:voice-dashboard-v3` image is retained for recovery. Before cutover,
 the ARM64 image passed all 134 offline tests on the server. The live update
 retained the existing dashboard and launcher IDs, with six current commands.
@@ -206,7 +209,7 @@ substitute for current capacity while sending a batch of DMs.
 The retired **➕ Create VC** entry is not recreated. Archived entry chat stays
 hidden to preserve history; it is not an active room or a private-room feature.
 
-The deployment backup is
+The original v4 deployment backup is
 `/opt/tempvcbot/backups/before-public-rooms-20261022T205822Z`. It contains the old
 source, Compose, image ID and a consistent pre-migration data archive. Secrets
 remain in their original mount. There were no active rooms at cutover; an

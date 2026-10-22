@@ -72,7 +72,7 @@ class RoomService:
         # values before editing so announcements describe the actual change.
         channel = await self.channel(room).guild.fetch_channel(room.channel_id)
         if not isinstance(channel, discord.VoiceChannel) or channel.guild.id != room.guild_id:
-            raise RoomError('This room no longer exists. Use Find a room again.')
+            raise RoomError('This room no longer exists. Use /rooms again.')
         return channel
 
     def authorize(self, channel_id, actor):
@@ -104,7 +104,7 @@ class RoomService:
         if room and room.host_id == member.id:
             return room
         if self.is_staff(member):
-            raise RoomError('Use Find a room, choose the room, then Manage room for a staff override.')
+            raise RoomError('Use /rooms, choose the room, then Manage room for a staff override.')
         raise RoomError('You are not hosting a room. Join your room to regain ownership, or use Create a room.')
 
     @staticmethod
@@ -122,7 +122,7 @@ class RoomService:
     def accessible(self, channel_id, actor):
         room = self.store.rooms.get(channel_id)
         if room is None or getattr(getattr(actor, 'guild', None), 'id', None) != room.guild_id:
-            raise RoomError('This room no longer exists in this server. Use Find a room again.')
+            raise RoomError('This room no longer exists in this server. Use /rooms again.')
         channel = self.channel(room)
         permissions = channel.permissions_for(actor)
         if actor.bot or not permissions.view_channel or not permissions.connect:
@@ -537,9 +537,9 @@ class RoomService:
         embed = discord.Embed(title='🎙️ Voice Dashboard', color=0x5865F2,
             description='All rooms are **public** to members with normal voice access. New rooms have **no user limit**.\n\n'
             '**Create a room:** start a public voice room. If already in voice, you will be moved. Otherwise join within 60 seconds.\n'
-            '**Find a room:** check availability. If a room is full, choose **Notify me** for a one-time DM when space opens.\n'
             '**Manage my room:** rename your room or set a size of **5–99**; **0** means unlimited.\n'
-            '**Server staff:** use Find a room → Manage room to override settings. Staff can set **1–99** or unlimited.\n\n'
+            '**Join / Notify me:** use the panel in a room’s chat, or use /rooms. Full rooms offer a one-time availability DM.\n'
+            '**Server staff:** use /rooms → choose a room → Manage room to override settings. Staff can set **1–99** or unlimited.\n\n'
             'Everyone can chat and use webcam/video. Regular room hosts cannot kick or block people, or make rooms private. '
             'Admins and moderators retain their native Discord moderation powers. '
             'The earliest-joined member takes over after the host leaves; the creator regains hosting on return. '

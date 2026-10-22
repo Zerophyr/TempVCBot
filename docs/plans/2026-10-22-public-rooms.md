@@ -1,7 +1,7 @@
 # Public rooms and availability alerts
 
 Status: DEPLOYED on 22 October 2026 after the user's explicit deployment and
-push instruction. Runtime source: `479f212`. The original implementation was
+push instruction. Runtime source is recorded in `/opt/tempvcbot/SOURCE_COMMIT`. The original implementation was
 held locally until that approval; the requirements below record that workflow.
 
 ## Requested behavior
@@ -20,7 +20,7 @@ held locally until that approval; the requirements below record that workflow.
 
 Discord's documented VOICE_STATE_UPDATE reports changes of voice state; it
 does not provide a supported failed-join hook. The bot cannot modify the
-native client “channel full” dialog. Provide Find a room on the dashboard,
+native client “channel full” dialog. Provide /rooms for browsing,
 Join / Notify me on room panels, and /notify for a full managed room. Each
 check uses current occupancy. Notification opt-in is explicit and user-bound.
 
@@ -77,3 +77,6 @@ successful bot name/limit changes with actor ID and before/after values,
 without pings. Include actor and host IDs in Discord audit-log reasons.
 Owner status and announcements are best effort if staff restrict the bot;
 room chat remains temporary and no separate permanent moderation log is added.
+
+The dashboard room-finder button was removed at the user's request. Its three
+buttons are Create a room, Manage my room and Help; /rooms remains available.

@@ -13,7 +13,7 @@
 
 ## Join someone else's room
 
-Open **Find a room** in the dashboard, or use `/rooms`. Pick a room to check
+Use `/rooms`. Pick a room to check
 whether it has space, then select **Join voice room**. You can also use
 **Join / Notify me** in that room's chat panel.
 
@@ -25,7 +25,7 @@ Open the link in the DM to join. If it fills again, you can subscribe again.
 Cancel using **Cancel my notification**, or `/unnotify channel: <room>`.
 
 Discord's normal “channel full” message cannot show the bot's buttons. If you
-try joining directly and it is full, open **Find a room** or use
+try joining directly and it is full, use `/rooms` or
 `/notify channel: <room>`. **Check again** refreshes availability if it changes
 while you have the menu open.
 
@@ -40,7 +40,7 @@ The **current host** can use **Manage my room**, `/room`, or the room chat panel
 There are no private rooms, invitation requirements, kick or block controls.
 Admins and server moderators always retain their normal Discord moderation
 authority, including manually removing people according to their permissions.
-They can override a room's settings without becoming host: open **Find a room**,
+They can override a room's settings without becoming host: use `/rooms`,
 choose the room, then **Manage room**. Staff can set **1–99** participants or
 **0** for unlimited. The five-person minimum applies to regular hosts.
 The bot preserves manual staff settings and moderation changes across host
