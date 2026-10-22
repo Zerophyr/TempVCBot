@@ -111,6 +111,32 @@ class MigrationAndAuditTests(unittest.IsolatedAsyncioTestCase):
         await self.service.set_limit(100, self.creator, 0)
         self.assertIn('**5** → **Unlimited**', self.channel.send.call_args.args[0])
 
+    async def test_consecutive_limit_edits_use_rest_values_while_gateway_cache_lags(self):
+        fresh = MagicMock(spec=discord.VoiceChannel)
+        fresh.id, fresh.guild, fresh.name, fresh.user_limit = 100, self.guild, 'Current name', 0
+        fresh.permissions_for.return_value = discord.Permissions(view_channel=True, connect=True)
+        fresh.send = AsyncMock(return_value=self.panel)
+        fresh.fetch_message = AsyncMock(return_value=self.panel)
+        async def edit(**kwargs):
+            fresh.user_limit = kwargs['user_limit']
+            return fresh
+        fresh.edit = AsyncMock(side_effect=edit)
+        self.guild.fetch_channel.side_effect = None
+        self.guild.fetch_channel.return_value = fresh
+        await self.service.set_limit(100, self.creator, 5)
+        await self.service.set_limit(100, self.creator, 0)
+        changes = [call.args[0] for call in fresh.send.call_args_list if call.args]
+        self.assertEqual(len(changes), 2)
+        self.assertIn('**5** → **Unlimited**', changes[-1])
+        self.assertEqual(self.channel.user_limit, 0)  # Gateway never caught up.
+
+    async def test_unavailable_current_settings_cannot_publish_a_change(self):
+        self.guild.fetch_channel.side_effect = discord.NotFound(SimpleNamespace(status=404, reason='Not Found'), 'Gone')
+        with self.assertRaises(discord.NotFound):
+            await self.service.rename(100, self.creator, 'Not applied')
+        self.channel.edit.assert_not_awaited()
+        self.channel.send.assert_not_awaited()
+
     async def test_no_change_does_not_announce_a_settings_change(self):
         self.room.panel_id = 500
         await self.service.rename(100, self.creator, self.channel.name)

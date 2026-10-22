@@ -74,6 +74,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.category.create_voice_channel = AsyncMock(return_value=self.channel)
         self.channels = {100: self.channel, 200: self.category}
         self.guild.get_channel.side_effect = self.channels.get
+        self.guild.fetch_channel = AsyncMock(side_effect=self.channels.get)
         self.bot = MagicMock()
         self.bot.get_channel.side_effect = self.channels.get
         self.bot.get_guild.return_value = self.guild

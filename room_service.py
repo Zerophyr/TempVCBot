@@ -67,6 +67,14 @@ class RoomService:
             raise RoomError('This room no longer exists. Use Create a room to start again.')
         return channel
 
+    async def current_settings_channel(self, room):
+        # Gateway state can lag behind consecutive REST edits. Read the current
+        # values before editing so announcements describe the actual change.
+        channel = await self.channel(room).guild.fetch_channel(room.channel_id)
+        if not isinstance(channel, discord.VoiceChannel) or channel.guild.id != room.guild_id:
+            raise RoomError('This room no longer exists. Use Find a room again.')
+        return channel
+
     def authorize(self, channel_id, actor):
         room = self.store.rooms.get(channel_id)
         if room is None or actor.guild.id != room.guild_id:
@@ -301,7 +309,7 @@ class RoomService:
             raise RoomError('Choose a room name from 1 to 100 characters on a single line.')
         async with self.locks[channel_id]:
             room = self.authorize(channel_id, actor)
-            channel = self.channel(room)
+            channel = await self.current_settings_channel(room)
             old_name = channel.name
             updated = await channel.edit(name=name, reason=f'TempVCBot rename by user {actor.id}; current host {room.host_id}')
             updated = updated if isinstance(updated, discord.VoiceChannel) else channel
@@ -317,7 +325,7 @@ class RoomService:
             minimum = 1 if self.is_staff(actor) else 5
             if isinstance(limit, bool) or not isinstance(limit, int) or not (limit == 0 or minimum <= limit <= 99):
                 raise RoomError(f'Choose {minimum}–99 participants, or 0 for unlimited.')
-            channel = self.channel(room)
+            channel = await self.current_settings_channel(room)
             old_limit = channel.user_limit
             updated = await channel.edit(user_limit=limit, reason=f'TempVCBot limit change by user {actor.id}; current host {room.host_id}')
             updated = updated if isinstance(updated, discord.VoiceChannel) else channel
