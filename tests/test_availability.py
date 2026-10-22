@@ -181,7 +181,7 @@ class AvailabilityTests(unittest.IsolatedAsyncioTestCase):
         await self.service.channel_update(self.channel)
         self.friend.send.assert_awaited_once()
 
-    async def test_external_small_limit_is_normalized_to_five(self):
+    async def test_external_small_limit_is_preserved_as_a_manual_staff_override(self):
         self.prepare()
         self.channel.user_limit = 2
         async def edit_limit(**kwargs):
@@ -189,7 +189,8 @@ class AvailabilityTests(unittest.IsolatedAsyncioTestCase):
             return self.channel
         self.channel.edit.side_effect = edit_limit
         await self.service.channel_update(self.channel)
-        self.assertEqual(self.channel.user_limit, 5)
+        self.assertEqual(self.channel.user_limit, 2)
+        self.channel.edit.assert_not_awaited()
 
     async def test_notification_never_moves_a_user(self):
         self.prepare()

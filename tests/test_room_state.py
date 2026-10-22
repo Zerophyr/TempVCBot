@@ -17,16 +17,20 @@ except ModuleNotFoundError:
 class Target:
     id: int
 
+    @property
+    def permissions(self):
+        return discord.Permissions.none()
+
 
 class Guild:
     id = 1
     default_role = Target(1)
     me = Target(9)
-    roles = {2: Target(2), 3: Target(3)}
+    roles = [Target(2), Target(3)]
     members = {10: Target(10), 20: Target(20), 30: Target(30)}
 
     def get_role(self, ident):
-        return self.roles.get(ident)
+        return next((role for role in self.roles if role.id == ident), None)
 
     def get_member(self, ident):
         return self.members.get(ident)

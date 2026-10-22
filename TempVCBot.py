@@ -20,11 +20,14 @@ HELP = (
     '**Join:** use Find a room or Join / Notify me to check availability and open its voice link.\n'
     '**Full room:** choose Notify me for one DM when space opens. You can cancel anytime; '
     'enable server-member DMs. Notifications do not reserve a place or move you automatically.\n'
-    '**Settings:** only the current host can rename or set a limit: 5–99 people, or 0 for unlimited. '
+    '**Settings:** the current host can rename or set a limit: 5–99 people, or 0 for unlimited. '
+    'Admins and server moderators can override settings; staff can set 1–99 or unlimited. '
     'There are no private modes, invitations, kicks or blocks. Everyone with normal voice access can chat and use video.\n'
     '**Hosting:** after a 10-second grace, the earliest-joined person still present becomes host. '
     'The creator regains hosting on return.\n'
     '**Controls:** use Manage my room, /room, or the room chat panel. Reopen personal menus anytime.\n'
+    '**Server staff:** retain normal Discord removal, move, mute, kick and ban powers according to their permissions. '
+    'Staff can use Find a room → Manage room without becoming host.\n'
     '**Cleanup:** rooms disappear 10 seconds after everyone leaves. Rooms created outside voice '
     'allow 60 seconds for someone to join. Save anything you want to keep from the chat.'
 )
@@ -39,7 +42,7 @@ async def respond(interaction, content=None, *, room_id=None, **kwargs):
     tracking = isinstance(tracker, ResponseTracker)
     if tracking and room_id and 'view' not in kwargs:
         room = client.store.rooms.get(room_id)
-        if room and room.host_id == interaction.user.id:
+        if room and client.service.can_manage(room, interaction.user):
             kwargs['view'] = DashboardView(client, room_id)
             kwargs.setdefault('embed', client.service.embed(room, client.service.channel(room)))
     source = getattr(interaction, 'message', None)
@@ -141,7 +144,8 @@ class DashboardView(SafeView):
             room = self.bot.service.authorize(self.channel_id, interaction.user)
             channel = self.bot.service.channel(room)
             value = channel.name if action == 'rename' else str(channel.user_limit)
-            await interaction.response.send_modal(SettingsModal(self.bot, self.channel_id, action, value))
+            await interaction.response.send_modal(SettingsModal(self.bot, self.channel_id, action, value,
+                                                                staff=self.bot.service.is_staff(interaction.user)))
         return callback
 
 
@@ -175,6 +179,10 @@ class AvailabilityView(UserView):
             cancel = discord.ui.Button(label='Cancel my notification', row=1)
             cancel.callback = self.cancel
             self.add_item(cancel)
+        if bot.service.can_manage(room, actor):
+            manage = discord.ui.Button(label='Manage room', emoji='⚙️', row=1)
+            manage.callback = self.manage
+            self.add_item(manage)
         refresh = discord.ui.Button(label='Check again', emoji='🔄', row=1)
         refresh.callback = self.refresh
         self.add_item(refresh)
@@ -194,6 +202,9 @@ class AvailabilityView(UserView):
 
     async def refresh(self, interaction):
         await self.bot.open_room(interaction, self.channel_id)
+
+    async def manage(self, interaction):
+        await self.bot.manage_room_for(interaction, self.channel_id)
 
 
 class RoomBrowserView(UserView):
@@ -240,10 +251,11 @@ class RoomBrowserView(UserView):
 
 
 class SettingsModal(discord.ui.Modal):
-    def __init__(self, bot, channel_id, action, current):
+    def __init__(self, bot, channel_id, action, current, *, staff=False):
         super().__init__(title='Rename room' if action == 'rename' else 'Participant limit')
         self.bot, self.channel_id, self.action = bot, channel_id, action
-        self.value_input = discord.ui.TextInput(label='Room name' if action == 'rename' else 'Limit: 0 unlimited, or 5–99',
+        limit_label = 'Staff limit: 0 unlimited, or 1–99' if staff else 'Limit: 0 unlimited, or 5–99'
+        self.value_input = discord.ui.TextInput(label='Room name' if action == 'rename' else limit_label,
             default=current, min_length=1, max_length=100 if action == 'rename' else 2)
         self.add_item(self.value_input)
 
@@ -252,7 +264,8 @@ class SettingsModal(discord.ui.Modal):
             self.bot.service.authorize(self.channel_id, interaction.user)
             value = self.value_input.value
             if self.action == 'limit' and (not value.isascii() or not value.isdigit()):
-                raise RoomError('Enter 5–99 people, or 0 for unlimited.')
+                minimum = 1 if self.bot.service.is_staff(interaction.user) else 5
+                raise RoomError(f'Enter {minimum}–99 people, or 0 for unlimited.')
             await interaction.response.defer(ephemeral=True)
             if self.action == 'rename':
                 await self.bot.service.rename(self.channel_id, interaction.user, value)
@@ -382,7 +395,12 @@ class RoomBot(commands.Bot):
         if interaction.guild is None:
             raise RoomError('Manage your room inside the server.')
         room = self.service.managed(interaction.user)
-        await interaction.response.defer(ephemeral=True)
+        await self.manage_room_for(interaction, room.channel_id)
+
+    async def manage_room_for(self, interaction, channel_id):
+        room = self.service.authorize(channel_id, interaction.user)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
         await self.service.refresh_panel(room)
         await respond(interaction, embed=self.service.embed(room, self.service.channel(room)), view=DashboardView(self, room.channel_id))
 
@@ -401,7 +419,7 @@ class RoomBot(commands.Bot):
         async def createvc(interaction: discord.Interaction):
             await self.create_for(interaction)
 
-        @self.tree.command(name='room', description='Open controls for the voice room you currently host.')
+        @self.tree.command(name='room', description='Open room settings as the current host or server staff.')
         @app_commands.guild_only()
         async def room(interaction: discord.Interaction):
             await self.manage_for(interaction)

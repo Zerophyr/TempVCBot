@@ -20,7 +20,7 @@ class PublicPolicyTests(unittest.TestCase):
         from tests.test_room_state import Guild
         guild = Guild()
         overwrites = room_state.build_overwrites(guild, room_state.Room(100, 1, 10, 10), [2, 3])
-        for role in guild.roles.values():
+        for role in guild.roles:
             for name in ['view_channel', 'connect', 'send_messages', 'stream']:
                 self.assertTrue(getattr(overwrites[role], name), name)
         self.assertFalse(overwrites[guild.default_role].connect)
@@ -106,6 +106,7 @@ class PublicServiceTests(unittest.IsolatedAsyncioTestCase):
         self.settings['1'].pop('creator_channel_id')
         self.service.ensure_launcher = AsyncMock()
         for limit in [0, 5, 99]:
+            self.room.public_policy_applied = False
             self.channel.user_limit = limit
             await self.service.restore(self.guild)
             self.assertEqual(self.channel.edit.call_args.kwargs['user_limit'], limit)

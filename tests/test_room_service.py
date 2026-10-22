@@ -40,8 +40,11 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.guild.me = member(9, self.guild, bot=True)
         self.guild.default_role = MagicMock(spec=discord.Role)
         self.guild.default_role.id = 1
+        self.guild.default_role.permissions = discord.Permissions.none()
         self.role = MagicMock(spec=discord.Role)
         self.role.id = 2
+        self.role.permissions = discord.Permissions.none()
+        self.guild.roles = [self.guild.default_role, self.role]
         self.guild.get_role.side_effect = lambda ident: self.role if ident == 2 else None
         self.creator = member(10, self.guild)
         self.friend = member(20, self.guild)
@@ -54,6 +57,7 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.channel.name = "Member 10's Room"
         self.channel.user_limit = 0
         self.channel.members = [self.creator, self.friend]
+        self.channel.permissions_for.return_value = discord.Permissions(view_channel=True, connect=True)
         self.channel.edit = AsyncMock()
         self.channel.delete = AsyncMock()
         self.channel.send = AsyncMock()
@@ -220,6 +224,10 @@ class ServiceTests(unittest.IsolatedAsyncioTestCase):
         self.channels.pop(100)
         self.service.cleanup_controls = AsyncMock()
         self.service.refresh_panel = AsyncMock()
+        async def create_and_cache(**kwargs):
+            self.channels[100] = self.channel
+            return self.channel
+        self.category.create_voice_channel.side_effect = create_and_cache
         await self.service.create(self.creator)
         self.service.cleanup_controls.assert_awaited_once_with(100)
 

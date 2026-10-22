@@ -9,6 +9,14 @@ from pathlib import Path
 import discord
 
 
+def staff_permissions(permissions):
+    """Native moderation authority, never a role name or a new permission grant."""
+    return any(getattr(permissions, name) for name in (
+        'administrator', 'manage_guild', 'manage_channels', 'move_members',
+        'kick_members', 'ban_members', 'moderate_members', 'mute_members', 'deafen_members',
+    ))
+
+
 def atomic_json(path: Path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix('.tmp')
@@ -30,6 +38,7 @@ class Room:
     sequence: int = 0
     panel_id: int | None = None
     created_at: float = field(default_factory=time.time)
+    public_policy_applied: bool = False
 
     def join(self, member_id):
         if member_id not in self.join_order:
@@ -58,6 +67,7 @@ class Room:
     def from_dict(cls, value, *, legacy=False):
         value = dict(value)
         if legacy:
+            value['public_policy_applied'] = False
             if value.pop('mode', 'hidden') not in {'hidden', 'visible', 'public'}:
                 raise ValueError('Invalid legacy room privacy mode')
             value.pop('invited', None)
@@ -101,6 +111,9 @@ def build_overwrites(guild, room, audience_ids):
     overwrites = {guild.default_role: member_access(not audience)}
     for role in audience:
         overwrites[role] = member_access()
+    for role in guild.roles:
+        if staff_permissions(role.permissions):
+            overwrites[role] = member_access()
     for ident in {room.creator_id, room.host_id}:
         target = guild.get_member(ident) or discord.Object(id=ident, type=discord.Member)
         overwrites[target] = member_access()

@@ -16,15 +16,37 @@ commit `bb25cd267808fd0aac112a631c61945d1e4aa4d1`.
 2. If already in voice, the bot moves you into your new room. Otherwise open
    the room link and join within **60 seconds** before an unused room expires.
 3. Use **Manage my room**, `/room`, or the room chat panel for settings. Only
-   the current host can rename a room or change its size.
+   the current host or server staff can rename a room or change its size.
 4. Everyone with normal voice access can read and write in the room's chat,
    join voice and use webcam/video. No invitation is needed. The bot has no
    private/invite-only modes, Create with friends, invitation-access controls,
    kick, disconnect, block, unblock or ban commands.
 
-The optional participant limit accepts **0 (unlimited)** or **5–99**. Setting
+For regular hosts, the optional participant limit accepts **0 (unlimited)** or **5–99**. Setting
 a lower limit never disconnects people already inside. Discord members with
 privileged permissions may bypass a voice channel's native limit.
+
+## Server staff always retain moderation authority
+
+Server owners, admins and moderators can override room settings without taking
+ownership: **Find a room → choose room → Manage room**, or `/room` while in it.
+Staff may set **1–99** participants or **0 (unlimited)**. Ordinary hosts cannot
+use the staff exemption. Permission checks run again on each action, including
+modal submission, so a demoted staff member cannot reuse old controls.
+
+Staff authority is recognized by server ownership or existing native Discord
+permissions: Administrator, Manage Server, Manage Channels, Move/Mute/Deafen
+Members, Kick Members, Ban Members, or Timeout Members. A role's name alone
+does not grant authority. The bot grants no new move/mute/kick/ban permissions.
+
+Admins/mods can remove people manually using Discord according to their native
+permissions and role hierarchy. Room access policy does not deny those powers;
+staff roles also retain access to newly created public rooms. Handover does
+not reset permission overwrites. After the one-time public-room migration,
+restarts preserve staff's manual room limits and moderation overwrites.
+The bot checks effective access before moving a creator into a room, so it
+does not bypass a moderator's explicit Connect denial.
+Native moderation still follows [Discord's permission hierarchy](https://docs.discord.com/developers/topics/permissions).
 
 ## Full rooms and one-time notifications
 
@@ -124,13 +146,15 @@ deployment. Keep `/opt/tempvcbot/secrets` untouched. The token is read from
 
 - `config.json`: managed category, dashboard and pinned launcher IDs. Existing
   dashboard IDs/history are reused; dashboard revision becomes 4.
-- `rooms.json`: schema 3 stores creator, host, arrival order, panel, timestamps
-  and waiting member IDs. Reading a schema-2 file converts it in memory without
+- `rooms.json`: schema 3 stores creator, host, arrival order, panel, timestamps,
+  waiting member IDs and a one-time public-policy migration flag. Reading a schema-2 file converts it in memory without
   writing during load. Saving writes schema 3 and omits removed privacy,
   invitation and block fields.
-- At future startup, active old rooms receive public overwrites, removing old
+- At the first future startup, active old rooms receive public overwrites, removing old
   per-member restrictions. Legacy limits 1–4 become 5; 0 and 5–99 are preserved.
   Channel IDs, host/creator, panel IDs, arrival order and timestamps are retained.
+  The migration flag is then persisted. Subsequent restarts and host handovers
+  retain native moderation overwrites and staff-set limits rather than resetting them.
 - `channels.json`: legacy ownership is imported only if rooms.json is absent.
 - `health.json`: initialization/gateway readiness, room count, private replies
   and notification opt-ins. Failed initialization cannot report ready.

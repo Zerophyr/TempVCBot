@@ -44,3 +44,16 @@ alerts on departures/limit changes/reconnect, cancellations, failed DMs,
 access revocation, simultaneous subscriptions and stale UI interactions.
 Review source/config diffs and update member instructions for this unreleased
 version. No Docker/Compose startup or remote application command sync.
+
+## Staff-authority refinement
+
+Server owners and members with native server/voice moderation permissions can
+override host settings without taking ownership. Regular hosts accept limits
+0 or 5–99; staff accept 0 or 1–99. Native Discord removal/move/mute/kick/ban
+authority remains with existing server permissions and role hierarchy.
+
+Public access is applied once per room. Persist the completed migration flag,
+retain manual moderation overwrites and limits on subsequent restarts, and
+stop rewriting channel permissions during host handover. Check effective
+Connect/View access before automatically moving a creator into any room.
+The existing category and archived history remain unchanged.

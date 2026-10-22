@@ -10,7 +10,7 @@ from pathlib import Path
 
 import discord
 
-from room_state import Room, atomic_json, build_overwrites, member_access
+from room_state import Room, atomic_json, build_overwrites, member_access, staff_permissions
 
 log = logging.getLogger(__name__)
 
@@ -69,9 +69,16 @@ class RoomService:
         room = self.store.rooms.get(channel_id)
         if room is None or actor.guild.id != room.guild_id:
             raise RoomError('This room no longer exists. Open Manage my room again.')
-        if actor.id != room.host_id:
-            raise RoomError('Only the current host can do that. Open Manage my room to check the host.')
+        if not self.can_manage(room, actor):
+            raise RoomError('Only the current host or server staff can do that. Open Manage my room to check the host.')
         return room
+
+    @staticmethod
+    def is_staff(actor):
+        return not actor.bot and (actor.id == actor.guild.owner_id or staff_permissions(actor.guild_permissions))
+
+    def can_manage(self, room, actor):
+        return actor.guild.id == room.guild_id and (actor.id == room.host_id or self.is_staff(actor))
 
     def owned(self, member):
         return next((room for room in self.store.rooms.values()
@@ -81,11 +88,13 @@ class RoomService:
         voice = getattr(member, 'voice', None)
         if voice and voice.channel:
             room = self.store.rooms.get(voice.channel.id)
-            if room and room.host_id == member.id:
+            if room and self.can_manage(room, member):
                 return room
         room = self.owned(member)
         if room and room.host_id == member.id:
             return room
+        if self.is_staff(member):
+            raise RoomError('Use Find a room, choose the room, then Manage room for a staff override.')
         raise RoomError('You are not hosting a room. Join your room to regain ownership, or use Create a room.')
 
     @staticmethod
@@ -179,7 +188,7 @@ class RoomService:
         embed.add_field(name='Creator', value=f'<@{room.creator_id}>')
         embed.add_field(name='Participant limit', value=str(channel.user_limit or 'Unlimited'))
         embed.add_field(name='Your room', value=f'[Open voice and chat]({self.link(room)})', inline=False)
-        embed.set_footer(text='Join / Notify me: everyone • Rename and size: current host • /room reopens controls')
+        embed.set_footer(text='Join / Notify me: everyone • Settings: host and server staff • /room reopens controls')
         return embed
 
     async def ensure_panel(self, room):
@@ -206,9 +215,9 @@ class RoomService:
         except discord.HTTPException:
             log.exception('Room %s updated, but its panel could not be refreshed', room.channel_id)
 
-    async def _apply(self, candidate, channel):
-        await channel.edit(overwrites=build_overwrites(channel.guild, candidate, self.audience_ids),
-                           reason='Public room ownership update')
+    async def _apply(self, candidate):
+        # Hosting grants bot controls, not Discord moderation powers. Do not
+        # reset native moderation overwrites when ownership changes.
         self.store.rooms[candidate.channel_id] = candidate
         self.store.save()
 
@@ -220,6 +229,7 @@ class RoomService:
             if existing:
                 channel = self.bot.get_channel(existing.channel_id)
                 if channel:
+                    self.accessible(existing.channel_id, creator)
                     if creator.voice and creator.voice.channel and creator.voice.channel.id != channel.id and not self.full(channel):
                         await creator.move_to(channel)
                     await self.refresh_panel(existing)
@@ -229,7 +239,8 @@ class RoomService:
             category = creator.guild.get_channel(settings.get('category_id', 0))
             if not isinstance(category, discord.CategoryChannel):
                 raise RoomError('Room creation is not configured. Ask a server admin to run /setup.')
-            room = Room(channel_id=0, guild_id=creator.guild.id, creator_id=creator.id, host_id=creator.id)
+            room = Room(channel_id=0, guild_id=creator.guild.id, creator_id=creator.id, host_id=creator.id,
+                        public_policy_applied=True)
             channel = await category.create_voice_channel(
                 name=f"{creator.display_name}'s Room"[:100],
                 overwrites=build_overwrites(creator.guild, room, self.audience_ids),
@@ -241,6 +252,7 @@ class RoomService:
             self.store.save()
             try:
                 if creator.voice and creator.voice.channel:
+                    self.accessible(room.channel_id, creator)
                     await creator.move_to(channel)
             finally:
                 self.schedule(room.channel_id, delay=60)
@@ -257,10 +269,11 @@ class RoomService:
             await self.refresh_panel(room)
 
     async def set_limit(self, channel_id, actor, limit):
-        if isinstance(limit, bool) or not isinstance(limit, int) or not (limit == 0 or 5 <= limit <= 99):
-            raise RoomError('Choose 5–99 participants, or 0 for unlimited.')
         async with self.locks[channel_id]:
             room = self.authorize(channel_id, actor)
+            minimum = 1 if self.is_staff(actor) else 5
+            if isinstance(limit, bool) or not isinstance(limit, int) or not (limit == 0 or minimum <= limit <= 99):
+                raise RoomError(f'Choose {minimum}–99 participants, or 0 for unlimited.')
             updated = await self.channel(room).edit(user_limit=limit, reason='Participant limit set by temporary room host')
             await self.refresh_panel(room)
         await self.notify_available(channel_id, channel=updated if isinstance(updated, discord.VoiceChannel) else None)
@@ -268,8 +281,7 @@ class RoomService:
     async def channel_update(self, channel):
         if channel.id not in self.store.rooms:
             return
-        if 0 < channel.user_limit < 5:
-            channel = await channel.edit(user_limit=5, reason='Temporary rooms have a minimum optional limit of five')
+        # Native changes belong to server staff; do not normalize their limit.
         await self.notify_available(channel.id, channel=channel)
         room = self.store.rooms.get(channel.id)
         if room:
@@ -322,7 +334,7 @@ class RoomService:
             if successor is not None and successor != room.host_id:
                 candidate = copy.deepcopy(room)
                 candidate.host_id = successor
-                await self._apply(candidate, channel)
+                await self._apply(candidate)
                 await self.refresh_panel(candidate)
                 try:
                     await channel.send(
@@ -461,8 +473,10 @@ class RoomService:
             description='All rooms are **public** to members with normal voice access. New rooms have **no user limit**.\n\n'
             '**Create a room:** start a public voice room. If already in voice, you will be moved. Otherwise join within 60 seconds.\n'
             '**Find a room:** check availability. If a room is full, choose **Notify me** for a one-time DM when space opens.\n'
-            '**Manage my room:** rename your room or set a size of **5–99**; **0** means unlimited.\n\n'
-            'Everyone can chat and use webcam/video. Room hosts cannot kick or block people, or make rooms private. '
+            '**Manage my room:** rename your room or set a size of **5–99**; **0** means unlimited.\n'
+            '**Server staff:** use Find a room → Manage room to override settings. Staff can set **1–99** or unlimited.\n\n'
+            'Everyone can chat and use webcam/video. Regular room hosts cannot kick or block people, or make rooms private. '
+            'Admins and moderators retain their native Discord moderation powers. '
             'The earliest-joined member takes over after the host leaves; the creator regains hosting on return. '
             'Empty rooms are automatically deleted.')
         embed.set_footer(text='Use these buttons anytime • /room also opens your controls')
@@ -491,9 +505,13 @@ class RoomService:
             await self.reconcile(room.channel_id)
             room = self.store.rooms.get(room.channel_id)
             if room:
-                updated = await channel.edit(overwrites=build_overwrites(guild, room, self.audience_ids),
-                                   user_limit=5 if 0 < channel.user_limit < 5 else channel.user_limit,
-                                   reason='Restore public room access and minimum optional limit')
+                updated = channel
+                if not room.public_policy_applied:
+                    updated = await channel.edit(overwrites=build_overwrites(guild, room, self.audience_ids),
+                                                 user_limit=5 if 0 < channel.user_limit < 5 else channel.user_limit,
+                                                 reason='One-time migration to public room access')
+                    room.public_policy_applied = True
+                    self.store.save()
                 await self.refresh_panel(room)
                 await self.notify_available(room.channel_id, channel=updated if isinstance(updated, discord.VoiceChannel) else None)
         await self.ensure_launcher(guild)

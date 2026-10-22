@@ -38,7 +38,13 @@ The **current host** can use **Manage my room**, `/room`, or the room chat panel
   limit does not remove people already inside.
 
 There are no private rooms, invitation requirements, kick or block controls.
-Server moderation remains with the server's moderators.
+Admins and server moderators always retain their normal Discord moderation
+authority, including manually removing people according to their permissions.
+They can override a room's settings without becoming host: open **Find a room**,
+choose the room, then **Manage room**. Staff can set **1–99** participants or
+**0** for unlimited. The five-person minimum applies to regular hosts.
+The bot preserves manual staff settings and moderation changes across host
+changes and restarts after the initial update.
 
 ## Leave and cleanup
 

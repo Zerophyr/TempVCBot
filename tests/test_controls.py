@@ -28,11 +28,13 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         self.bot.store.rooms[100] = self.room
         self.guild = MagicMock(spec=discord.Guild)
         self.guild.id = 1
+        self.guild.owner_id = 999
         self.actor = MagicMock(spec=discord.Member)
         self.actor.id = 10
         self.actor.guild = self.guild
         self.actor.voice = None
         self.actor.bot = False
+        self.actor.guild_permissions = discord.Permissions.none()
         self.channel = MagicMock(spec=discord.VoiceChannel)
         self.channel.id, self.channel.guild = 100, self.guild
         self.channel.name, self.channel.user_limit, self.channel.members = 'Public room', 0, []
@@ -227,6 +229,31 @@ class ControlTests(unittest.IsolatedAsyncioTestCase):
         view = controls.AvailabilityView(self.bot, self.actor, self.room, self.channel)
         self.assertNotIn('Notify me when a place opens', {item.label for item in view.children})
         self.assertIn('You are in this room', {item.label for item in view.children})
+
+    async def test_staff_can_open_room_management_from_room_browser_card(self):
+        self.actor.id = 20
+        self.actor.guild_permissions = discord.Permissions(move_members=True)
+        view = controls.AvailabilityView(self.bot, self.actor, self.room, self.channel)
+        button = next(item for item in view.children if item.label == 'Manage room')
+        self.bot.manage_room_for = AsyncMock()
+        await button.callback(self.interaction)
+        self.bot.manage_room_for.assert_awaited_once_with(self.interaction, 100)
+        self.assertEqual(self.room.host_id, 10)
+
+    async def test_demoted_staff_cannot_submit_an_old_staff_settings_modal(self):
+        self.actor.id = 20
+        self.actor.guild_permissions = discord.Permissions(administrator=True)
+        modal = controls.SettingsModal(self.bot, 100, 'limit', '5', staff=True)
+        modal.value_input._value = '1'
+        self.actor.guild_permissions = discord.Permissions.none()
+        self.bot.service.set_limit = AsyncMock()
+        await modal.on_submit(self.interaction)
+        self.bot.service.set_limit.assert_not_awaited()
+
+    async def test_regular_guest_has_no_management_button(self):
+        self.actor.id = 20
+        view = controls.AvailabilityView(self.bot, self.actor, self.room, self.channel)
+        self.assertNotIn('Manage room', {item.label for item in view.children})
 
 
 if __name__ == '__main__':
